@@ -1,0 +1,23 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next
+*.tsbuildinfo
+
+# production
+/build
+
+# env files
+.env
+.env*
+.env*.local
+
+# vercel
+.vercel
+
+# misc
+.DS_Store
+
+# claude
+.claude*
