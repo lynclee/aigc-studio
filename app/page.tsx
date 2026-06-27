@@ -20,6 +20,15 @@ function LarkIcon({ className }: { className?: string }) {
   )
 }
 
+/**
+ * 登录失败错误码 → 固定中文文案。只渲染映射命中的文案,绝不回显 URL 里的任意 error 文本,
+ * 避免反射飞书/异常的原始 message(信息泄露 / 反射型注入面)。
+ */
+const ERROR_MESSAGES: Record<string, string> = {
+  oauth_failed: "登录失败,请重试",
+  state_mismatch: "登录态校验失败,请重新登录",
+}
+
 export default async function HomePage({
   searchParams,
 }: {
@@ -29,6 +38,8 @@ export default async function HomePage({
   if (session) redirect("/portal")
 
   const { error } = await searchParams
+  // 有 error 参数就显示固定文案;未知码回落到通用文案,不渲染原始字符串
+  const errorMessage = error ? (ERROR_MESSAGES[error] ?? "登录失败,请重试") : null
 
   return (
     <main className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-6">
@@ -51,9 +62,9 @@ export default async function HomePage({
           </p>
         </div>
 
-        {error ? (
+        {errorMessage ? (
           <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-            {error}
+            {errorMessage}
           </div>
         ) : null}
 

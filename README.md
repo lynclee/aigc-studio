@@ -30,7 +30,7 @@ bash scripts/setup-env.sh   # 交互式填 .env.local(敏感值不回显,3 个�
 npm run dev                 # http://localhost:3000
 ```
 
-脚本:`npm run dev | build | start | lint | typecheck`。
+脚本:`npm run dev | build | start | typecheck`。
 
 ## 部署(从零到上线)
 
@@ -42,17 +42,17 @@ npm run dev                 # http://localhost:3000
 |---|---|---|
 | GitHub | 放代码 | 一个 private 仓库 |
 | 飞书开放平台 | 网页应用 OAuth 登录 | `App ID` / `App Secret` |
-| Supabase | 画廊索引库 | `Project URL` / `anon key` / `service_role key` |
+| Supabase | 画廊索引库 | `Project URL` / `service_role key` |
 | Cloudflare R2 | 存作品图 | `Account ID` / `Access Key ID` / `Secret` / 桶名 |
 | Vercel | 部署门户 | 用 GitHub 登录即可 |
 
-另外用 `openssl rand -hex 32` 各生成一串:`SESSION_SECRET`、`BRIDGE_API_KEY`（给美术同学配进插件）、`CRON_SECRET`。
+另外用 `openssl rand -hex 32` 各生成一串:`SESSION_SECRET`、`BRIDGE_API_KEY`（给美术同学配进插件）。
 
 ### 2. Supabase 建库 + 跑迁移
 
 1. supabase.com 建项目（记下数据库密码）。
 2. 左侧 **SQL Editor** → 新建查询 → 把 `supabase/migrations/0001_gallery_items.sql` 内容贴进去 → **Run**。
-3. 左侧 **Settings → API** 复制 `Project URL`、`anon public`、`service_role`（机密）。
+3. 左侧 **Settings → API** 复制 `Project URL`、`service_role`（机密）。
 
 ### 3. Cloudflare R2 建桶 + CORS
 
@@ -104,6 +104,8 @@ Content-Type: application/json
 ```
 
 门户只读这张索引表 + 按需签 R2 预签名 URL 展示，不直接接触出图过程。后续可在插件侧封装成自动回写。
+
+> **信任假设(internal trust assumption)**:当前 `BRIDGE_API_KEY` 是**全团队共享的同一把密钥**,且 `ingest` 直接接受调用方在 body 里传入的 `open_id` —— 因此**任一持钥者理论上可冒用他人 `open_id` 写入**。这在内部团队场景下是可接受的简化,但不是面向不可信调用方的隔离。要收紧(让每个人只能写自己的产物、避免共享密钥),见后续 **presigned-PUT 方案**(门户按登录用户签发受限的 R2 直传凭据,open_id 由服务端会话推导而非客户端传入)。
 
 ## 环境变量与密钥安全
 

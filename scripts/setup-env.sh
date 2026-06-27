@@ -26,7 +26,6 @@ asks LARK_APP_SECRET        "App Secret"
 ask  LARK_REDIRECT_URI      "回调 URL(https://<域名>/api/auth/lark/callback)"
 echo "── Supabase ──"
 ask  NEXT_PUBLIC_SUPABASE_URL      "Project URL"
-asks NEXT_PUBLIC_SUPABASE_ANON_KEY "anon public key"
 asks SUPABASE_SERVICE_ROLE_KEY     "service_role key"
 echo "── Cloudflare R2 ──"
 ask  R2_ACCOUNT_ID        "Account ID"
@@ -34,7 +33,7 @@ asks R2_ACCESS_KEY_ID     "Access Key ID"
 asks R2_SECRET_ACCESS_KEY "Secret Access Key"
 ask  R2_BUCKET            "桶名 Bucket"
 echo "── 自生成密钥(直接回车=用 openssl 自动生成一串)──"
-for k in SESSION_SECRET BRIDGE_API_KEY CRON_SECRET; do
+for k in SESSION_SECRET BRIDGE_API_KEY; do
   read -r -s -p "  $k (回车=自动生成): " v; echo
   [ -z "$v" ] && v="$(openssl rand -hex 32)"
   set_kv "$k" "$v"

@@ -50,8 +50,11 @@ async function loadGallery(openId: string): Promise<GalleryCard[] | null> {
     .order("created_at", { ascending: false })
     .limit(60)
 
-  // 查询出错(表不存在 / 网络等)按空画廊处理,不让页面崩
-  if (error || !data) return []
+  // 查询出错(表不存在 / 网络等)按空画廊处理,不让页面崩;但先打日志,别静默吞
+  if (error || !data) {
+    if (error) console.error("[gallery] query failed:", error)
+    return []
+  }
 
   // 并行对每条 r2_key 签预签名 URL
   return Promise.all(

@@ -28,11 +28,14 @@ export async function GET(req: NextRequest) {
   // 用完即清,无论成功失败
   store.set(OAUTH_STATE_COOKIE, "", { path: "/", maxAge: 0 })
 
+  // 失败一律回有限错误码(不把飞书/异常的原始 message 反射进 URL),真实细节进 server log
   if (!code) {
-    return redirectHome(req, "授权被取消或未返回 code")
+    console.error("[lark] callback missing code")
+    return redirectHome(req, "oauth_failed")
   }
   if (!state || !savedState || state !== savedState) {
-    return redirectHome(req, "state 校验失败,请重试登录")
+    console.error("[lark] callback state mismatch")
+    return redirectHome(req, "state_mismatch")
   }
 
   try {
@@ -45,7 +48,7 @@ export async function GET(req: NextRequest) {
     })
     return NextResponse.redirect(new URL("/portal", req.url))
   } catch (err) {
-    const message = err instanceof Error ? err.message : "登录失败"
-    return redirectHome(req, message)
+    console.error("[lark] oauth callback failed:", err)
+    return redirectHome(req, "oauth_failed")
   }
 }

@@ -13,12 +13,17 @@
 import { cookies } from "next/headers"
 
 export const SESSION_COOKIE = "aigc_session"
-const SESSION_MAX_AGE = 60 * 60 * 24 * 7 // 7 天
+const SESSION_MAX_AGE = 60 * 60 * 24 * 7 // 7 天(同时作为 cookie maxAge 与 payload.exp 的 TTL)
 
 export interface SessionPayload {
   open_id: string
   name: string
   avatar: string
+}
+
+/** 写进 cookie 的内部 payload —— 比对外 SessionPayload 多一个绝对过期时间戳(Unix 秒)。 */
+interface SignedPayload extends SessionPayload {
+  exp: number
 }
 
 function getSecretKey(): Promise<CryptoKey> {
@@ -57,10 +62,14 @@ function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0
 }
 
-/** 把 payload 编码并签名成 `<payload>.<sig>` 字符串。 */
+/** 把 payload 编码并签名成 `<payload>.<sig>` 字符串(写入 7 天后的绝对过期戳 exp)。 */
 export async function signSession(payload: SessionPayload): Promise<string> {
   const key = await getSecretKey()
-  const payloadB64 = base64UrlEncode(new TextEncoder().encode(JSON.stringify(payload)))
+  const signed: SignedPayload = {
+    ...payload,
+    exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE,
+  }
+  const payloadB64 = base64UrlEncode(new TextEncoder().encode(JSON.stringify(signed)))
   const sigBuf = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payloadB64))
   const sigB64 = base64UrlEncode(new Uint8Array(sigBuf))
   return `${payloadB64}.${sigB64}`
@@ -85,8 +94,12 @@ export async function verifySession(token: string): Promise<SessionPayload | nul
     if (!timingSafeEqual(sigB64, expectedB64)) return null
 
     const json = new TextDecoder().decode(base64UrlDecode(payloadB64))
-    const parsed = JSON.parse(json) as Partial<SessionPayload>
+    const parsed = JSON.parse(json) as Partial<SignedPayload>
     if (typeof parsed.open_id !== "string" || !parsed.open_id) return null
+    // 过期检查:exp 必须存在且晚于当前时刻(缺 exp 的旧 cookie 一并判失效,强制重登)
+    if (typeof parsed.exp !== "number" || parsed.exp <= Math.floor(Date.now() / 1000)) {
+      return null
+    }
     return {
       open_id: parsed.open_id,
       name: typeof parsed.name === "string" ? parsed.name : "",

@@ -12,10 +12,23 @@
  */
 
 import { NextResponse } from "next/server"
+import { timingSafeEqual } from "node:crypto"
 import { getSupabaseAdmin } from "@/lib/supabase/admin"
 
-// 需要 node runtime:service_role 客户端 + 读 server-only env
+// 需要 node runtime:service_role 客户端 + 读 server-only env + node:crypto
 export const runtime = "nodejs"
+
+/**
+ * 常量时间比较两个密钥字符串,避免按字符早退泄露时序信息。
+ * 先比长度(不等直接判失败,顺带规避 timingSafeEqual 对不等长 Buffer 抛错),
+ * 再对等长 Buffer 做 timingSafeEqual。
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, "utf8")
+  const bBuf = Buffer.from(b, "utf8")
+  if (aBuf.length !== bBuf.length) return false
+  return timingSafeEqual(aBuf, bBuf)
+}
 
 interface IngestBody {
   open_id?: unknown
@@ -36,7 +49,7 @@ export async function POST(req: Request) {
   }
   const auth = req.headers.get("authorization") ?? ""
   const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : ""
-  if (!token || token !== expected) {
+  if (!token || !constantTimeEqual(token, expected)) {
     return NextResponse.json({ ok: false, error: "未授权" }, { status: 401 })
   }
 

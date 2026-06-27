@@ -139,9 +139,15 @@ export async function fetchUserInfo(userAccessToken: string): Promise<LarkUserIn
     throw new Error(`飞书 user_info 获取失败:${detail}`)
   }
 
+  // open_id 是会话身份的主键,空值会签发"匿名"session 导致登录成功却进不去的死循环 —— 直接拒绝
+  const openId = data.data.open_id
+  if (typeof openId !== "string" || !openId.trim()) {
+    throw new Error("lark userinfo missing open_id")
+  }
+
   return {
     name: data.data.name ?? "",
-    open_id: data.data.open_id ?? "",
+    open_id: openId,
     avatar_url: data.data.avatar_url ?? "",
   }
 }
