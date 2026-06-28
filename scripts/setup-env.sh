@@ -33,7 +33,7 @@ asks R2_ACCESS_KEY_ID     "Access Key ID"
 asks R2_SECRET_ACCESS_KEY "Secret Access Key"
 ask  R2_BUCKET            "桶名 Bucket"
 echo "── 自生成密钥(直接回车=用 openssl 自动生成一串)──"
-for k in SESSION_SECRET BRIDGE_API_KEY; do
+for k in SESSION_SECRET; do
   read -r -s -p "  $k (回车=自动生成): " v; echo
   [ -z "$v" ] && v="$(openssl rand -hex 32)"
   set_kv "$k" "$v"

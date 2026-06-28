@@ -1,8 +1,9 @@
 -- 作品画廊索引表 / Gallery index table
 --
--- 数据流:美术同学的 comfyui_modal_bridge 插件出图 → 图存 Cloudflare R2
--- (key 带 open_id 前缀做用户隔离)→ 插件 POST /api/gallery/ingest(带 BRIDGE_API_KEY
--- 鉴权)写一条索引到这里 → 门户按登录用户 open_id 读取并对 r2_key 签预签名 URL 展示。
+-- 数据流(presigned-PUT):美术同学的 comfyui_modal_bridge 插件持 upload-token(绑本人
+-- open_id)→ POST /api/gallery/upload-url 验 token 推导 open_id、写一条索引到这里、签 R2
+-- 预签名 PUT URL → 插件把图直传 R2(key 强制 <open_id>/<uuid>.<ext> 前缀隔离)→ 门户按
+-- 登录用户 open_id 读取并对 r2_key 签预签名 GET URL 展示。
 --
 -- ⚠️ 本项目不用 Supabase Auth(用飞书 OAuth + 自管 cookie session),
 -- 所以这张表「仅服务端用 service_role 访问,并在应用层按 open_id 过滤」。

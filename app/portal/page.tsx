@@ -1,9 +1,11 @@
 import { redirect } from "next/navigation"
-import { ImageIcon, Sparkles } from "lucide-react"
+import { ImageIcon, KeyRound, Sparkles } from "lucide-react"
 import { getSession } from "@/lib/session"
 import { LogoutButton } from "@/components/logout-button"
+import { CopyButton } from "@/components/copy-button"
 import { getSupabaseAdmin } from "@/lib/supabase/admin"
 import { getR2Env, signGetUrl } from "@/lib/r2"
+import { signUploadToken } from "@/lib/upload-token"
 
 export const dynamic = "force-dynamic"
 
@@ -74,6 +76,9 @@ export default async function PortalPage() {
 
   const initial = (session.name || "?").trim().charAt(0).toUpperCase()
   const cards = await loadGallery(session.open_id)
+  // 当前用户的 upload-token(绑其 open_id),给 ComfyUI Modal Bridge 插件配置用。
+  // 有会话即代表 SESSION_SECRET 已配,signUploadToken 不会因缺密钥抛错。
+  const uploadToken = signUploadToken(session.open_id)
 
   return (
     <div className="min-h-screen bg-neutral-950">
@@ -116,6 +121,8 @@ export default async function PortalPage() {
 
       {/* 主区 */}
       <main className="mx-auto max-w-6xl px-6 py-10">
+        <PluginConfig token={uploadToken} />
+
         <div className="mb-8 flex items-end justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight text-white">
@@ -141,6 +148,43 @@ export default async function PortalPage() {
         )}
       </main>
     </div>
+  )
+}
+
+/**
+ * 插件配置区:展示当前用户的 upload-token(绑其 open_id)+ 复制按钮。
+ * 美术同学把这串 token 填进 ComfyUI Modal Bridge 插件即可直传 —— 不用配 R2 凭据。
+ */
+function PluginConfig({ token }: { token: string }) {
+  return (
+    <section className="mb-10 rounded-2xl border border-white/10 bg-white/[0.02] p-6">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-500/15 text-indigo-300">
+          <KeyRound className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-semibold tracking-tight text-white">
+            ComfyUI Modal Bridge 插件配置
+          </h2>
+          <p className="mt-1 text-sm text-neutral-400">
+            把下面这串 upload token 填进插件的「门户 upload token」即可，
+            <span className="text-neutral-300">不用配 R2 凭据</span>
+            。出图后插件凭它自动直传，作品汇聚到下方画廊。
+          </p>
+
+          <div className="mt-4 flex items-center gap-2.5 rounded-xl border border-white/10 bg-neutral-900/60 p-2.5">
+            <code className="min-w-0 flex-1 truncate px-1.5 font-mono text-xs text-neutral-300">
+              {token}
+            </code>
+            <CopyButton value={token} label="复制 token" />
+          </div>
+
+          <p className="mt-2.5 text-xs text-neutral-500">
+            token 绑定你的账号身份，请勿外泄；若泄露，重新登录门户、并轮换服务端 SESSION_SECRET 即可让旧 token 失效。
+          </p>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -197,11 +241,11 @@ function EmptyState() {
         </div>
         <h2 className="text-base font-medium text-neutral-200">还没有作品</h2>
         <p className="mt-2 max-w-md text-sm text-neutral-500">
-          在 ComfyUI 里用 Modal Bridge 出图,带上门户的{" "}
+          把上方的{" "}
           <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[12px] text-neutral-300">
-            BRIDGE_API_KEY
+            upload token
           </code>{" "}
-          回写,作品会自动出现在这里。
+          填进 ComfyUI Modal Bridge 插件,出图后会自动直传 R2,作品就会出现在这里。
         </p>
       </div>
     </section>

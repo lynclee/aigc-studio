@@ -13,7 +13,7 @@
  */
 
 import { S3Client } from "@aws-sdk/client-s3"
-import { GetObjectCommand } from "@aws-sdk/client-s3"
+import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 
 export interface R2Env {
@@ -74,6 +74,38 @@ export async function signGetUrl(
     return await getSignedUrl(r2.client, command, { expiresIn: expiresInSeconds })
   } catch {
     // 签名失败(凭据错 / key 非法等)不抛,返回 null 让 UI 降级
+    return null
+  }
+}
+
+/**
+ * 对一个 R2 对象 key 签一个**预签名 PUT URL**,供持 upload-token 的插件直传 R2。
+ *
+ * 用 `PutObjectCommand`(Bucket/Key/ContentType)签名 —— 预签名里钉死了 key 与
+ * Content-Type,插件 PUT 时只能写这个 key、且 `Content-Type` 头必须与签名时一致,
+ * 不能挪去写别人的前缀(防冒名的第一道闸在 upload-url route:key 强制 openId 前缀)。
+ *
+ * @param key R2 对象 key(不含 bucket;由 upload-url route 强制成 `<openId>/<uuid>.<ext>`)
+ * @param contentType 对象 Content-Type(按 ext 推导)
+ * @param expiresInSeconds 有效期秒数,默认 600(10 分钟,够出图后立即直传,过期面小)
+ * @returns 预签名 PUT URL;env 缺失或签名失败返回 null(调用方据此 500)
+ */
+export async function signPutUrl(
+  key: string,
+  contentType: string,
+  expiresInSeconds = 600,
+): Promise<string | null> {
+  const r2 = getR2Client()
+  if (!r2) return null
+  try {
+    const command = new PutObjectCommand({
+      Bucket: r2.bucket,
+      Key: key,
+      ContentType: contentType,
+    })
+    return await getSignedUrl(r2.client, command, { expiresIn: expiresInSeconds })
+  } catch {
+    // 签名失败(凭据错 / key 非法等)不抛,返回 null 让调用方降级
     return null
   }
 }
