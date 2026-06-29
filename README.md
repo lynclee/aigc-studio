@@ -38,6 +38,30 @@ npm run dev                 # http://localhost:3000
 
 脚本:`npm run dev | build | start | typecheck`。
 
+## 快速配置(最快路径)
+
+老手照这张清单走即可;每步细节见下面「部署(从零到上线)」。配置有 4 个落点:**门户 env**、**三个服务后台**(Supabase / R2 / 飞书)、**Vercel 部署**、**美术同学插件**。
+
+| 步骤 | 怎么做 |
+|---|---|
+| 1. 本地 env | `bash scripts/setup-env.sh`(交互填 `.env.local`,密钥不回显,`SESSION_SECRET` 回车自动生成) |
+| 2. 生产 env | **首选** Vercel 网页 Settings → Environment Variables,右上角**直接粘贴整个 `.env.local`**,一次导入全部变量;命令行党用 `bash scripts/push-env-to-vercel.sh`(需先 `vercel login` + `vercel link`) |
+| 3. Supabase | SQL Editor 贴 [`supabase/migrations/0001_gallery_items.sql`](./supabase/migrations/0001_gallery_items.sql) → Run;或装 CLI 后 `supabase db push` |
+| 4. Vercel 部署 | Import GitHub 仓库 → 填好 env → Deploy → 拿到 `https://xxx.vercel.app` |
+| 5. R2 CORS(拿到域名后) | `node scripts/setup-r2-cors.mjs https://你的域名.vercel.app` |
+| 6. 飞书回调 | 飞书后台 **安全设置 → 重定向 URL** 手动填 `https://你的域名.vercel.app/api/auth/lark/callback`(无 API,绕不过),并确保 `LARK_REDIRECT_URI` 与之一致 |
+| 7. 美术同学 | 登录门户 → 复制顶部「ComfyUI Modal Bridge 插件配置」里的 **upload-token** → 配进插件 |
+
+**第 5 步说明(R2 CORS 一键脚本)**:用 `@aws-sdk/client-s3` 的 `PutBucketCorsCommand` 程序化配 CORS(R2 的 S3 API 支持,[官方文档](https://developers.cloudflare.com/r2/api/s3/api/))。⚠️ 配 CORS 属「编辑桶配置」,按 [R2 token 权限矩阵](https://developers.cloudflare.com/r2/api/tokens/#permissions)需 **Admin Read & Write** 档的 token;门户日常用的 Object 档 token 跑这个**可能 AccessDenied**。失败就走兜底:
+
+- **dashboard 手动贴**(最稳):进桶 **Settings → CORS Policy**,贴下面 JSON(把 origin 换成你的域名):
+  ```json
+  [{ "AllowedOrigins": ["https://你的域名.vercel.app"], "AllowedMethods": ["GET","HEAD","PUT"], "AllowedHeaders": ["*"], "ExposeHeaders": ["content-length"], "MaxAgeSeconds": 3600 }]
+  ```
+- **或 wrangler**:`wrangler r2 bucket cors set <桶名> --file cors.json`(wrangler 走自己的 OAuth 登录,权限与 S3 access key 独立)。
+
+> 两个辅助脚本(`scripts/setup-r2-cors.mjs`、`scripts/push-env-to-vercel.sh`)的完整前置与用法都写在脚本顶部注释里。
+
 ## 部署(从零到上线)
 
 > 门户**不需要 Modal 账号**。按顺序走一遍即可上线。
