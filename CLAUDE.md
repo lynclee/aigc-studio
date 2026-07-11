@@ -2,7 +2,7 @@
 
 本文件为 Claude Code / Codex 在 `aigc-studio` 仓库工作时提供稳定架构指引。
 
-> 项目：**AIGC Studio** — 面向设计师和美术同学的 AIGC 创作网站。用户用飞书登录，在图片 / 3D / 视频三入口选择预设工作流，输入 prompt，由云端服务器后台生成，随后在个人作品库查看结果。页面关闭不会停止后台检查；Vercel Cron 每 5 分钟继续同步未完成任务。
+> 项目：**AIGC Studio** — 面向设计师和美术同学的 AIGC 创作网站。用户用飞书登录，在图片 / 3D / 视频三入口选择预设工作流，输入 prompt，由云端服务器后台生成，随后在个人作品库查看结果。页面打开时会检查任务；页面关闭后由每天一次的 Vercel Cron 兜底同步未完成任务。
 > 普通用户只使用门户提交和查看作品；旧后台上传流程已退出主流程，只在迁移说明中出现。
 
 **新会话第一步：先读 `docs/HANDOFF.md`。** 该文件记录当前状态、交接要点和后续任务；本文件只放稳定架构事实。
@@ -81,7 +81,7 @@ npm run start      # 启动生产服务
 任务状态检查必须按已存的 `aigc_jobs.provider` 分发，不能用当前环境变量重新推断。部署侧顺序是 Modal → OpenRouter → fal → ComfyUI，但不是自动 fallback；快速切换只需修改 Vercel 的 `AIGC_IMAGE_PROVIDER` 并重新部署。之前已提交的任务仍会由原服务完成检查。
 切换期间必须保留旧服务的地址与密钥，直到该服务的 active jobs 全部结束；`provider` 记录的是分发依据，不会保存密钥。
 
-`vercel.json` 配置 Vercel Cron：`/api/jobs/reconcile` 每 5 分钟执行一次。该接口读取最多 50 个未完成任务，轮询 provider 状态；成功后必须把结果保存到 R2 并落库，失败则把任务标记为 failed。`CRON_SECRET` 是后台定时检查专用口令，只应配置在 Vercel 服务端环境变量中。
+`vercel.json` 配置 Vercel Cron：`/api/jobs/reconcile` 每天 `03:30` 执行一次（`30 3 * * *`，适配 Vercel Hobby）。页面打开时的任务查询仍会即时轮询；Cron 只负责用户离开页面后的兜底。该接口读取最多 50 个未完成任务，轮询 provider 状态；成功后必须把结果保存到 R2 并落库，失败则把任务标记为 failed。`CRON_SECRET` 是后台定时检查专用口令，只应配置在 Vercel 服务端环境变量中。
 
 `~/.modal.toml` 只用于部署者本机 Modal CLI 登录和部署，不能复制到 Vercel，也不能写进仓库。
 

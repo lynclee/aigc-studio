@@ -19,7 +19,7 @@ AIGC Studio 是给设计师和美术同学使用的 AIGC 作品网站。使用�
   → 完成作品进入个人作品库
 ```
 
-提交生成后，任务记录会先写入数据库，再交给部署同学选定的云端生成服务处理。Vercel Cron 每 5 分钟访问一次后台检查接口，继续同步未完成任务。即使使用者关掉页面，任务完成后仍会落到个人作品库。
+提交生成后，任务记录会先写入数据库，再交给部署同学选定的云端生成服务处理。用户留在页面或重新打开网站时，网站会立即检查自己的任务；Vercel Cron 每天在后台做一次兜底检查。即使使用者关掉页面，任务仍会在下一次后台检查后进入个人作品库。
 
 迁移说明：旧上传口令 / `target_open_id` 已退出主流程；历史 gallery 数据不会自动回流，若需要保留由部署 / 运营同学做一次性迁移。
 
@@ -38,7 +38,7 @@ AIGC Studio 是给设计师和美术同学使用的 AIGC 作品网站。使用�
 - Cloudflare R2：保存生成后的图片、视频、3D 文件
 - 图片生成服务：部署者可在 Modal、OpenRouter、fal.ai、ComfyUI 之间选择一种；普通使用者不需要、也不能选择服务
 - fal.ai Queue API：3D 与视频生成入口；图片服务选为 fal.ai 时也走它
-- Vercel Cron：每 5 分钟后台检查未完成任务
+- Vercel Cron：每天一次后台兜底检查未完成任务（Hobby 方案可用）
 
 ## 核心架构
 
@@ -56,7 +56,7 @@ AIGC Studio 是给设计师和美术同学使用的 AIGC 作品网站。使用�
       └─ GET  /api/library           → 读取个人作品库
 
 Vercel Cron
-  └─ GET /api/jobs/reconcile          → 每 5 分钟检查未完成任务
+  └─ GET /api/jobs/reconcile          → 每天 03:30 做一次兜底检查
 
 服务端
   ├─ Supabase service_role 访问 aigc_jobs / aigc_generations / aigc_assets
@@ -152,7 +152,7 @@ Cloudflare R2 是作品库的正式文件仓库。任务只有在 provider 输�
 3. 在 Cloudflare R2 创建私有 bucket，配置 API token 和 CORS。
 4. 选择一个图片服务：Modal、OpenRouter、fal.ai 或 ComfyUI。按上表填写对应变量；3D 和视频另外准备 fal.ai key。
 5. 在 Vercel 导入仓库并填写环境变量，特别是 `CRON_SECRET`。
-6. 确认 `vercel.json` 中的 Cron 指向 `/api/jobs/reconcile`，计划为每 5 分钟一次。
+6. 确认 `vercel.json` 中的 Cron 指向 `/api/jobs/reconcile`，计划为每天 `03:30` 一次（`30 3 * * *`，可用于 Vercel Hobby）。
 7. 部署后打开网站，用飞书登录，提交图片 / 3D / 视频任务，确认任务状态和个人作品库正常。
 
 截图和验收材料统一放在：`/workspace/documents/screenshot`。

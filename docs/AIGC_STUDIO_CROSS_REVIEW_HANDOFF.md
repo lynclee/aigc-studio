@@ -47,7 +47,7 @@
 | 作品如何进入库 | 后台插件使用 upload-token 上传，并可传 target_open_id 指定归属 | 用户提交任务后，以登录态 open_id 写入任务；完成后自动落 R2 和个人作品库 |
 | 图片生成 | 没有站内提交主流程 | 部署者可选 Modal / OpenRouter / fal / 自建 ComfyUI |
 | 3D、视频 | 没有第一类产品入口 | 均有入口、任务记录、状态检查和个人作品库结果 |
-| 状态检查 | 无统一任务生命周期 | 提交后立即检查；前台刷新时检查；Vercel Cron 每 5 分钟检查未完成任务 |
+| 状态检查 | 无统一任务生命周期 | 提交后立即检查；前台刷新时检查；Vercel Cron 每天一次兜底检查未完成任务 |
 | 文件保存 | R2 主要承接手工上传 | provider 结果必须先保存到私有 R2，才会被视为完成作品 |
 | 面向美术的语言 | 有插件、上传口令等后台概念 | 只说工作流、提示词、云端后台生成、个人作品库 |
 
@@ -110,7 +110,7 @@ flowchart TD
 1. 生成 API 先验证飞书会话、prompt 和工作流白名单，再创建 aigc_jobs。
 2. 服务端提交给 provider，并保存 provider、provider_job_id 和 provider 返回信息。
 3. 提交后会立刻执行一次 reconcile；前台读 /api/jobs 时也会检查自己的任务。
-4. vercel.json 配置 /api/jobs/reconcile 每 5 分钟执行。它要求 Authorization: Bearer 加 CRON_SECRET，一次最多处理 50 个未完成任务。
+4. vercel.json 配置 /api/jobs/reconcile 每天 `03:30` 执行一次（`30 3 * * *`，适配 Vercel Hobby）。页面打开时的任务查询仍会即时检查；Cron 只负责用户离开页面后的兜底。它要求 Authorization: Bearer 加 CRON_SECRET，一次最多处理 50 个未完成任务。
 5. 任务会被认领并获得 5 分钟 lease，避免多个前台请求和 Cron 重复检查同一任务。
 6. provider 成功后，必须先把文件写入 R2，再创建 generation 和 asset；R2 失败则任务失败，不能把临时 provider URL 当正式作品。
 

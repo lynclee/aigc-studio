@@ -6,7 +6,7 @@
 
 - 项目定位：给设计师和美术同学使用的 AIGC 创作网站。
 - 主流程：飞书登录 → 图片 / 3D / 视频三入口 → 选择预设工作流 → 输入 prompt → 云端服务器后台生成 → 网站和后台定时检查状态 → 个人作品库。
-- 提交生成后，用户可以关闭页面；Vercel Cron 每 5 分钟调用后台检查接口，继续同步未完成任务。任务完成并成功保存到 R2 后，会进入个人作品库。
+- 提交生成后，用户留在页面或重新打开网站时会立即检查自己的任务；用户关闭页面后，Vercel Cron 每天一次调用后台检查接口兜底同步。任务完成并成功保存到 R2 后，会进入个人作品库。
 - 普通用户只使用门户提交和查看作品，不接触底层生成工具或后台迁移参数。
 - 迁移说明：旧上传口令 / `target_open_id` 已退出主流程；历史 gallery 数据不会自动回流，若需要保留由部署 / 运营同学做一次性迁移。
 - 截图、验收图片、页面证据统一放在 `/workspace/documents/screenshot`。
@@ -41,7 +41,7 @@
 | `lib/generations/serialize.ts` | 资产序列化和 R2 签名 URL |
 | `supabase/migrations/0001_gallery_items.sql` | 历史兼容表，非当前主流程 |
 | `supabase/migrations/0002_aigc_jobs_generations_assets.sql` | 当前主流程数据库表 |
-| `vercel.json` | Vercel Cron：每 5 分钟访问 `/api/jobs/reconcile` |
+| `vercel.json` | Vercel Cron：每天 `03:30` 访问 `/api/jobs/reconcile` 作为兜底 |
 
 ## 三、当前架构事实
 
@@ -68,7 +68,7 @@
 
 ### Vercel Cron
 
-- `vercel.json` 当前配置：`/api/jobs/reconcile`，计划为 `*/5 * * * *`。
+- `vercel.json` 当前配置：`/api/jobs/reconcile`，计划为 `30 3 * * *`（每天 `03:30`，适配 Vercel Hobby）。页面打开时仍由任务查询即时检查；Cron 只负责用户离开页面后的兜底。
 - `/api/jobs/reconcile` 要求 `Authorization: Bearer $CRON_SECRET`；`CRON_SECRET` 是后台定时检查专用口令，只配置在 Vercel 服务端环境变量中。
 - 接口每次最多取 50 个 active jobs，逐个调用 `reconcileJob`。
 - 如果 provider 成功但结果保存到 R2 失败，`reconcileJob` 会将任务标为 failed，而不是把 provider 临时链接当作完成作品。OpenRouter 与 ComfyUI 在 adapter 内先写入 R2，再由同一任务入库路径登记 assets。
