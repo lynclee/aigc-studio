@@ -4,7 +4,7 @@ import "./globals.css"
 
 export const metadata: Metadata = {
   title: "AIGC Studio",
-  description: "给美术同学的 AIGC 配套门户:飞书登录 + 作品画廊。",
+  description: "给美术/设计同学的 AIGC 创作入口:选择图片、3D、视频预设,填写描述后云端生成并进入个人作品库。",
 }
 
 export default function RootLayout({ children }: { children: ReactNode }) {

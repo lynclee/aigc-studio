@@ -4,7 +4,7 @@
  * R2 暴露 S3 兼容 API,用 @aws-sdk/client-s3 当客户端,endpoint 指向
  * `https://<account_id>.r2.cloudflarestorage.com`,region 固定 "auto"。
  *
- * 作品画廊的图由 comfyui_modal_bridge 插件直传 R2(私有 bucket),门户只持有
+ * 生成完成后,服务端会将提供商产物保存进私有 R2 bucket。个人作品库只持有
  * r2_key,展示时用 `signGetUrl` 现签一个 S3 预签名 GET URL(默认 7 天有效)。
  *
  * ⚠️ env 缺失时优雅降级:`getR2Client` 返回 null、`signGetUrl` 返回 null,
@@ -12,8 +12,7 @@
  * build / 占位 env 下不能让进程崩。
  */
 
-import { S3Client } from "@aws-sdk/client-s3"
-import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3"
+import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3"
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner"
 
 export interface R2Env {
@@ -23,7 +22,7 @@ export interface R2Env {
   bucket: string
 }
 
-/** 读 R2_* env,任一缺失返回 null(调用方据此降级到「画廊待配置」)。 */
+/** 读 R2_* env,任一缺失返回 null(调用方据此降级到「作品库待配置」)。 */
 export function getR2Env(): R2Env | null {
   const accountId = process.env.R2_ACCOUNT_ID
   const accessKeyId = process.env.R2_ACCESS_KEY_ID
@@ -74,38 +73,6 @@ export async function signGetUrl(
     return await getSignedUrl(r2.client, command, { expiresIn: expiresInSeconds })
   } catch {
     // 签名失败(凭据错 / key 非法等)不抛,返回 null 让 UI 降级
-    return null
-  }
-}
-
-/**
- * 对一个 R2 对象 key 签一个**预签名 PUT URL**,供持 upload-token 的插件直传 R2。
- *
- * 用 `PutObjectCommand`(Bucket/Key/ContentType)签名 —— 预签名里钉死了 key 与
- * Content-Type,插件 PUT 时只能写这个 key、且 `Content-Type` 头必须与签名时一致,
- * 不能挪去写别人的前缀(防冒名的第一道闸在 upload-url route:key 强制 openId 前缀)。
- *
- * @param key R2 对象 key(不含 bucket;由 upload-url route 强制成 `<openId>/<uuid>.<ext>`)
- * @param contentType 对象 Content-Type(按 ext 推导)
- * @param expiresInSeconds 有效期秒数,默认 600(10 分钟,够出图后立即直传,过期面小)
- * @returns 预签名 PUT URL;env 缺失或签名失败返回 null(调用方据此 500)
- */
-export async function signPutUrl(
-  key: string,
-  contentType: string,
-  expiresInSeconds = 600,
-): Promise<string | null> {
-  const r2 = getR2Client()
-  if (!r2) return null
-  try {
-    const command = new PutObjectCommand({
-      Bucket: r2.bucket,
-      Key: key,
-      ContentType: contentType,
-    })
-    return await getSignedUrl(r2.client, command, { expiresIn: expiresInSeconds })
-  } catch {
-    // 签名失败(凭据错 / key 非法等)不抛,返回 null 让调用方降级
     return null
   }
 }

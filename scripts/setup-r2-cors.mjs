@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 一键给 R2 桶配 CORS（让插件 presigned-PUT 直传 + 门户浏览器直读不被 CORS 挡）。
+ * 一键给 R2 桶配 CORS（当前产物由服务端写入 R2；本脚本只为浏览器读取预签名 GET/HEAD 不被 CORS 挡）。
  *
  * 用法:
  *   node scripts/setup-r2-cors.mjs https://你的域名.vercel.app
@@ -14,18 +14,18 @@
  *
  * 2) ⚠️ Token 权限:配 CORS 属于「编辑桶配置 / edit bucket configuration」。按官方权限矩阵
  *    出处:https://developers.cloudflare.com/r2/api/tokens/#permissions
- *      - **Object Read & Write**:只「read/write/list objects」—— 够签 GET/PUT 对象,
+ *      - **Object Read & Write**:只「read/write/list objects」—— 可供服务端日常读写对象,
  *        但**不含**编辑桶配置,对 PutBucketCors 大概率 AccessDenied。
  *      - **Admin Read & Write**:明确含「edit bucket configuration」—— 配 CORS 要用这一档。
- *    门户日常用的 R2_ACCESS_KEY 多半是 Object 档(只为 presign 对象),拿来跑本脚本可能被拒。
+ *    门户日常用的 R2_ACCESS_KEY 多半是 Object 档(只为服务端对象读写),拿来跑本脚本可能被拒。
  *    若被拒:① 临时另造一个 Admin Read & Write 的 R2 API Token 跑一次本脚本;或
- *           ② 直接 dashboard 手动贴 CORS(JSON 见 README「快速配置」);或
+ *           ② 直接 dashboard 手动配置只允许 GET/HEAD 的 CORS;或
  *           ③ wrangler:`wrangler r2 bucket cors set <桶> --file cors.json`
  *              (wrangler 走自己的 OAuth 登录,权限独立于 S3 access key)。
  *
  * 3) 为什么用 aws-sdk 而非 wrangler:@aws-sdk/client-s3 已是本项目依赖(lib/r2.ts 在用),
  *    复用 .env.local 里现成的 R2_* 凭据,零额外安装 / 零额外登录。wrangler 路径作为兜底
- *    写在上面注释和 README 里。
+ *    写在上面注释里。
  *
  * 4) 新版 aws-sdk(本仓库 3.1075.0)默认给请求加 CRC32 flexible checksum 头,而 R2 的
  *    PutBucketCors **不支持** `x-amz-sdk-checksum-algorithm` / `x-amz-checksum-algorithm`
@@ -118,7 +118,7 @@ async function main() {
 
   const corsRule = {
     AllowedOrigins: [normalizedOrigin],
-    AllowedMethods: ["GET", "HEAD", "PUT"],
+    AllowedMethods: ["GET", "HEAD"],
     AllowedHeaders: ["*"],
     ExposeHeaders: ["content-length"],
     MaxAgeSeconds: 3600,
@@ -132,7 +132,7 @@ async function main() {
       }),
     )
     console.log(
-      `✓ 已为桶 ${bucket} 配好 CORS(允许 ${normalizedOrigin} GET/HEAD/PUT)`,
+      `✓ 已为桶 ${bucket} 配好 CORS(允许 ${normalizedOrigin} GET/HEAD)`,
     )
   } catch (err) {
     const code = err?.name || err?.Code || "Unknown"
@@ -141,7 +141,7 @@ async function main() {
       "可能原因:R2 凭据是 Object 档(不含『编辑桶配置』权限)。两个兜底:",
     )
     console.error(
-      "  1) 改用 dashboard 手动贴 CORS —— 进桶 Settings → CORS Policy,贴 README『快速配置』里的 JSON;",
+      "  1) 改用 dashboard 手动配置 CORS —— 进桶 Settings → CORS Policy,只允许 GET/HEAD;",
     )
     console.error(
       "  2) 或临时用 Admin Read & Write 的 R2 API Token 重跑本脚本。",

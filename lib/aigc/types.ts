@@ -1,0 +1,78 @@
+export type AigcKind = "image" | "model3d" | "video"
+export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled"
+
+export interface SubmitRequest {
+  prompt: string
+  workflowId: string
+  input: Record<string, unknown>
+  userOpenId: string
+}
+
+export interface ProviderSubmitResult {
+  provider: string
+  providerJobId: string
+  status: JobStatus
+  statusUrl?: string
+  response: Record<string, unknown>
+}
+
+export interface ProviderOutputAsset {
+  assetType: string
+  position: number
+  url?: string
+  r2Key?: string
+  contentType?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface ProviderStatusResult {
+  status: JobStatus
+  response: Record<string, unknown>
+  error?: string
+  assets: ProviderOutputAsset[]
+}
+
+export interface AigcJobRecord {
+  id: string
+  user_open_id: string
+  kind: AigcKind
+  workflow_id: string
+  status: JobStatus
+  provider: string
+  provider_job_id: string | null
+  provider_status_url: string | null
+  request: Record<string, unknown>
+  provider_response: Record<string, unknown>
+  error: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export interface AigcGenerationRecord {
+  id: string
+  job_id: string
+  user_open_id: string
+  kind: AigcKind
+  workflow_id: string
+  prompt: string | null
+  provider: string
+  provider_job_id: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
+export interface AigcAssetRecord {
+  id: string
+  generation_id: string
+  job_id: string
+  user_open_id: string
+  kind: AigcKind
+  asset_type: string
+  position: number
+  r2_key: string | null
+  source_url: string | null
+  content_type: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+}

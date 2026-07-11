@@ -1,152 +1,221 @@
 # AIGC Studio
 
-给美术同学的 AIGC **配套门户**:飞书登录 + 作品画廊。
+AIGC Studio 是给设计师和美术同学使用的 AIGC 作品网站。使用同学打开网站、用飞书登录、选择图片 / 3D / 视频入口、选择预设工作流、输入 prompt，然后等待云端服务器后台生成。页面关闭后，后台仍会继续检查任务；完成作品会进入个人作品库。
 
-出图**不在网页里跑** —— 美术同学在本地 ComfyUI Desktop 用 [`comfyui_modal_bridge`](https://github.com/lynclee/comfyui_modal_bridge) 插件把工作流分发到**自己的 Modal GPU**,产物存进 Cloudflare R2 并回写本门户;门户只负责**登录、索引、展示**。因此**部署门户本身不需要 Modal 账号**。
+> 术语说明：
+> - **AIGC**：用 AI 生成图片、3D 模型、视频等内容。
+> - **prompt**：给 AI 的文字描述，例如“赛博朋克风格的狐狸角色设定图”。
+> - **工作流**：预设好的创作方法，用户只需要选择名称，不需要接触底层工具。
 
-## 技术栈
+## 产品主流程
+
+```text
+飞书登录
+  → 图片 / 3D / 视频三入口
+  → 选择预设工作流
+  → 输入 prompt（文字描述）
+  → 云端服务器后台生成
+  → 网站和后台定时检查状态
+  → 完成作品进入个人作品库
+```
+
+提交生成后，任务记录会先写入数据库，再交给部署同学选定的云端生成服务处理。Vercel Cron 每 5 分钟访问一次后台检查接口，继续同步未完成任务。即使使用者关掉页面，任务完成后仍会落到个人作品库。
+
+迁移说明：旧上传口令 / `target_open_id` 已退出主流程；历史 gallery 数据不会自动回流，若需要保留由部署 / 运营同学做一次性迁移。
+
+## 角色分工
+
+| 角色 | 负责什么 | 不需要做什么 |
+|---|---|---|
+| 部署 / 运营同学 | 配置飞书登录、Vercel、Supabase、Cloudflare R2，以及图片服务（Modal / OpenRouter / fal.ai / ComfyUI）和后台定时检查 | 不把服务端密钥发给普通用户 |
+| 美术 / 设计使用同学 | 登录网站，选择入口和工作流，填写 prompt，查看任务状态和个人作品库 | 不安装底层生成工具，不配置后台迁移参数 |
+
+## 当前技术栈
 
 - Next.js 16（App Router）+ TypeScript + Tailwind CSS
-- 飞书（Lark）OAuth 登录 + HMAC 签名 cookie 会话（零依赖,非 Supabase Auth）
-- Supabase Postgres（作品索引）
-- Cloudflare R2（作品图存储 + 预签名 URL）
+- 飞书 OAuth 登录 + HMAC 签名 cookie 会话
+- Supabase Postgres：记录任务、生成结果和作品资产
+- Cloudflare R2：保存生成后的图片、视频、3D 文件
+- 图片生成服务：部署者可在 Modal、OpenRouter、fal.ai、ComfyUI 之间选择一种；普通使用者不需要、也不能选择服务
+- fal.ai Queue API：3D 与视频生成入口；图片服务选为 fal.ai 时也走它
+- Vercel Cron：每 5 分钟后台检查未完成任务
 
-## 数据流
+## 核心架构
 
-走 **presigned-PUT**:插件只持一串绑自己 `open_id` 的 **upload-token**(门户 portal 页复制),
-**不碰 R2 凭据、不传 open_id**。出图后跟门户换一张限定到本人前缀、短过期的预签名 PUT URL 直传 R2。
+```text
+浏览器
+  │
+  ├─ 飞书 OAuth 登录
+  │   └─ /api/auth/lark/login → /api/auth/lark/callback
+  │
+  └─ /portal 创作工作台
+      ├─ POST /api/generate/image    → 部署者选定的图片生成服务
+      ├─ POST /api/generate/model3d  → fal.ai 3D 生成服务
+      ├─ POST /api/generate/video    → fal.ai 视频生成服务
+      ├─ GET  /api/jobs/:id          → 查询任务状态，完成后保存到 R2 并落库
+      └─ GET  /api/library           → 读取个人作品库
 
+Vercel Cron
+  └─ GET /api/jobs/reconcile          → 每 5 分钟检查未完成任务
+
+服务端
+  ├─ Supabase service_role 访问 aigc_jobs / aigc_generations / aigc_assets
+  └─ Cloudflare R2 保存生成资产，并为浏览器生成临时访问链接
 ```
-美术同学本地 ComfyUI + comfyui_modal_bridge
-  → 出图跑在各自的 Modal GPU
-  → 插件 POST /api/gallery/upload-url(Authorization: Bearer <upload-token>)
-      ↳ 门户验 token 推导 open_id(客户端无法冒名)
-      ↳ 生成 r2_key = <open_id>/<uuid>.<ext>(强制本人前缀)
-      ↳ 写一条索引到 Supabase + 返回 { uploadUrl, r2_key }
-  → 插件 PUT 图到 uploadUrl(直传 Cloudflare R2,门户/Vercel 零出口流量)
-门户:飞书登录 → 按 open_id 读 Supabase → 对 r2_key 签预签名 GET URL → 画廊展示
-```
 
-## 本地开发
+## 第一部分：部署 / 运营
+
+### 环境变量
+
+生产环境在 Vercel Project → Settings → Environment Variables 中配置。本地开发使用 `.env.local`；`scripts/setup-env.sh` 会协助写入同一组变量，包括 `AIGC_ASSET_HOST_ALLOWLIST`。脚本会对 `SESSION_SECRET` 和 `CRON_SECRET` 使用隐藏输入；直接回车时会自动生成随机值。脚本只写本地 `.env.local`，仍需把同一组变量填进 Vercel。敏感值不应提交到 git、截图或对话记录。
+
+| 变量 | 用途 |
+|---|---|
+| `LARK_APP_ID` | 飞书开放平台应用 ID |
+| `LARK_APP_SECRET` | 飞书开放平台应用密钥 |
+| `LARK_REDIRECT_URI` | 飞书登录回调地址，形如 `https://你的域名/api/auth/lark/callback` |
+| `SESSION_SECRET` | 签名登录 cookie 的随机密钥，可用 `openssl rand -hex 32` 生成 |
+| `CRON_SECRET` | 后台定时检查专用口令，可用 `openssl rand -hex 32` 生成，只配置在 Vercel 服务端环境变量中 |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase Project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase 服务端 service role key，只能放服务端环境变量 |
+| `R2_ACCOUNT_ID` | Cloudflare R2 Account ID |
+| `R2_ACCESS_KEY_ID` | Cloudflare R2 Access Key ID |
+| `R2_SECRET_ACCESS_KEY` | Cloudflare R2 Secret Access Key |
+| `R2_BUCKET` | Cloudflare R2 bucket 名称 |
+| `AIGC_IMAGE_PROVIDER` | 图片服务选择：`modal`（默认）/ `openrouter` / `fal` / `comfyui`。只由部署者设置，不显示在用户页面；此项就是快速切换开关 |
+| `MODAL_ENDPOINT_BASE` / `MODAL_KEY` / `MODAL_SECRET` | 仅当图片服务选 `modal` 时填写；endpoint 前缀会自动拼接 `-run` / `-status` / `-cancel` |
+| `OPENROUTER_API_KEY` / `OPENROUTER_IMAGE_MODEL` | 图片服务选 `openrouter` 时必填；后者是默认图片模型 ID |
+| `OPENROUTER_IMAGE_STANDARD_MODEL` / `OPENROUTER_IMAGE_DETAIL_MODEL` | 可选：给“标准出图”和“细节增强”分别指定 OpenRouter 图片模型 |
+| `OPENROUTER_IMAGE_RESOLUTION` / `OPENROUTER_IMAGE_ASPECT_RATIO` | 可选：统一指定 OpenRouter 的尺寸档和画面比例 |
+| `FAL_KEY` | fal.ai API key；3D 与视频必填，图片服务选 `fal` 时也使用它 |
+| `FAL_IMAGE_ENDPOINT` | 图片服务选 `fal` 时必填，填写 fal 的 endpoint 路径；可用 `FAL_IMAGE_STANDARD_ENDPOINT`、`FAL_IMAGE_DETAIL_ENDPOINT` 分别覆盖两个图片工作流 |
+| `FAL_MODEL3D_STANDARD_ENDPOINT` / `FAL_MODEL3D_GAME_ASSET_ENDPOINT` / `FAL_VIDEO_ENDPOINT` | 可选：替换内置的 3D / 视频 fal endpoint；不填就使用项目默认值 |
+| `COMFYUI_BASE_URL` | 图片服务选 `comfyui` 时必填，填写自建 ComfyUI 服务根地址，不要写 `/api`；Vercel 必须能访问该地址 |
+| `COMFY_ORG_API_KEY` | 仅工作流用了 GPT Image 等 ComfyUI 付费 API 节点时填写。这是部署者 ComfyUI 账号里有 API 积分的密钥；付费节点会从该账号扣费。网站只在服务端把它放进提交工作流时需要的 `extra_data`，不会发给浏览器 |
+| `AIGC_ASSET_HOST_ALLOWLIST` | 仅当自定义 Modal / fal 输出文件域名时填写；默认常见域名已覆盖。多个域名用英文逗号分隔 |
+
+`CRON_SECRET` 是 `/api/jobs/reconcile` 的访问口令。Vercel Cron 会带这个口令调用后台检查接口，普通用户不需要知道它。`scripts/setup-env.sh` 会先询问图片服务，再只询问所选服务的主要变量；上线前请把同一组变量填进 Vercel。`~/.modal.toml` 只在图片服务选 Modal 且部署者本机使用 Modal CLI 时才需要，不能复制到 Vercel，也不能当作网站环境变量。
+
+### 图片服务怎么选
+
+| 选项 | 适合什么情况 | 部署同学需要做什么 |
+|---|---|---|
+| `modal` | 已有自己的 Modal 图片服务 | 填 Modal endpoint 与密钥；图片任务支持真实取消 |
+| `openrouter` | 希望按模型 ID 更换云端图片模型 | 填 OpenRouter key 与默认图片模型；成图会直接保存到 R2 |
+| `fal` | 希望图片、3D、视频都由 fal.ai 提供 | 填 `FAL_KEY`，再填一个图片 endpoint 路径 |
+| `comfyui` | 已经有自建 ComfyUI 工作流，或要用 GPT Image 等付费节点 | 填自建服务地址；付费节点再填有 API 积分的 `COMFY_ORG_API_KEY`。网站会把它放进 ComfyUI 的后台提交信息，不会发给浏览器；完成后文件自动存到 R2 |
+
+这四种方式是**部署选择**，不是用户界面的“选模型”功能。网站仍只显示“标准出图”“细节增强”两个易懂的创作方法。
+
+#### 快速切换图片服务
+
+部署同学在 Vercel 的同一个环境（production / preview / development）中，只需把 `AIGC_IMAGE_PROVIDER` 改为 `modal`、`openrouter`、`fal` 或 `comfyui`，然后重新部署；不需要改页面、数据库或迁移。OpenRouter 排在 fal 前面，是当前推荐的图片服务顺序，**不是**自动兜底规则。
+
+切换前先保留旧图片服务的地址和密钥，直到它的未完成任务全部结束。旧任务会按自己数据库里保存的 provider 继续检查，不会因为新任务已改用 OpenRouter 而改去 fal 或其他服务。
+
+目前仓库内置的两份 ComfyUI 模板仍是 Z-Image 和 FLUX 的本地节点，并不自动变成 GPT Image。要使用 GPT Image，部署同学需要从 ComfyUI 导出那条工作流的 **API 格式 JSON**，再替换或新增网站的图片工作流模板；配置有 API 积分的 `COMFY_ORG_API_KEY` 后，网站会自动把密钥随工作流安全地交给 ComfyUI，收费节点便会从这个账号扣费。
+
+### 本地开发
 
 ```bash
 npm install
-bash scripts/setup-env.sh   # 交互式填 .env.local(敏感值不回显,3 个密钥可回车自动生成)
-# 或手动:cp .env.example .env.local 后编辑
-npm run dev                 # http://localhost:3000
+bash scripts/setup-env.sh
+npm run dev
 ```
 
-脚本:`npm run dev | build | start | typecheck`。
+然后打开 `http://localhost:3000`。常用脚本：
 
-## 快速配置(最快路径)
+```bash
+npm run dev
+npm run typecheck
+npm run build
+npm run start
+```
 
-老手照这张清单走即可;每步细节见下面「部署(从零到上线)」。配置有 4 个落点:**门户 env**、**三个服务后台**(Supabase / R2 / 飞书)、**Vercel 部署**、**美术同学插件**。
+### 数据库和文件仓库
 
-| 步骤 | 怎么做 |
+在 Supabase SQL Editor 依次执行：
+
+```text
+supabase/migrations/0001_gallery_items.sql
+supabase/migrations/0002_aigc_jobs_generations_assets.sql
+```
+
+`0001_gallery_items.sql` 是历史兼容表；当前主流程使用 `aigc_jobs`、`aigc_generations`、`aigc_assets`。
+
+Cloudflare R2 是作品库的正式文件仓库。任务只有在 provider 输出文件成功保存进 R2 后，才算真正完成；如果 R2 未配置、下载失败、上传失败或输出文件域名未通过安全检查，任务会显示失败，不再继续使用临时 provider 链接当作完成结果。
+
+### 部署要点
+
+1. 在飞书开放平台创建企业自建应用，开通网页应用登录，配置回调 URL。
+2. 在 Supabase 执行数据库迁移，复制 Project URL 和 service role key。
+3. 在 Cloudflare R2 创建私有 bucket，配置 API token 和 CORS。
+4. 选择一个图片服务：Modal、OpenRouter、fal.ai 或 ComfyUI。按上表填写对应变量；3D 和视频另外准备 fal.ai key。
+5. 在 Vercel 导入仓库并填写环境变量，特别是 `CRON_SECRET`。
+6. 确认 `vercel.json` 中的 Cron 指向 `/api/jobs/reconcile`，计划为每 5 分钟一次。
+7. 部署后打开网站，用飞书登录，提交图片 / 3D / 视频任务，确认任务状态和个人作品库正常。
+
+截图和验收材料统一放在：`/workspace/documents/screenshot`。
+
+### 主要 API
+
+| 路由 | 说明 |
 |---|---|
-| 1. 本地 env | `bash scripts/setup-env.sh`(交互填 `.env.local`,密钥不回显,`SESSION_SECRET` 回车自动生成) |
-| 2. 生产 env | **首选** Vercel 网页 Settings → Environment Variables,右上角**直接粘贴整个 `.env.local`**,一次导入全部变量;命令行党用 `bash scripts/push-env-to-vercel.sh`(需先 `vercel login` + `vercel link`) |
-| 3. Supabase | SQL Editor 贴 [`supabase/migrations/0001_gallery_items.sql`](./supabase/migrations/0001_gallery_items.sql) → Run;或装 CLI 后 `supabase db push` |
-| 4. Vercel 部署 | Import GitHub 仓库 → 填好 env → Deploy → 拿到 `https://xxx.vercel.app` |
-| 5. R2 CORS(拿到域名后) | `node scripts/setup-r2-cors.mjs https://你的域名.vercel.app` |
-| 6. 飞书回调 | 飞书后台 **安全设置 → 重定向 URL** 手动填 `https://你的域名.vercel.app/api/auth/lark/callback`(无 API,绕不过),并确保 `LARK_REDIRECT_URI` 与之一致 |
-| 7. 美术同学 | 登录门户 → 复制顶部「ComfyUI Modal Bridge 插件配置」里的 **upload-token** → 配进插件 |
+| `GET /api/auth/lark/login` | 跳转到飞书授权页 |
+| `GET /api/auth/lark/callback` | 处理飞书回调并写入登录 cookie |
+| `POST /api/auth/logout` | 清除登录 cookie |
+| `POST /api/generate/image` | 提交图片生成任务 |
+| `POST /api/generate/model3d` | 提交 3D 生成任务 |
+| `POST /api/generate/video` | 提交视频生成任务 |
+| `GET /api/jobs` | 读取当前用户自己的任务列表，并顺手同步状态 |
+| `GET /api/jobs/[id]` | 查询当前用户自己的任务状态 |
+| `POST /api/jobs/[id]` / `POST /api/jobs/[id]/cancel` | 取消当前用户自己的任务；只有图片服务选 Modal 时支持真实取消 |
+| `GET /api/jobs/reconcile` | Vercel Cron 使用的后台检查接口，需要 `CRON_SECRET` |
+| `GET /api/library` | 读取当前用户自己的个人作品库 |
 
-**第 5 步说明(R2 CORS 一键脚本)**:用 `@aws-sdk/client-s3` 的 `PutBucketCorsCommand` 程序化配 CORS(R2 的 S3 API 支持,[官方文档](https://developers.cloudflare.com/r2/api/s3/api/))。⚠️ 配 CORS 属「编辑桶配置」,按 [R2 token 权限矩阵](https://developers.cloudflare.com/r2/api/tokens/#permissions)需 **Admin Read & Write** 档的 token;门户日常用的 Object 档 token 跑这个**可能 AccessDenied**。失败就走兜底:
+### 安全边界
 
-- **dashboard 手动贴**(最稳):进桶 **Settings → CORS Policy**,贴下面 JSON(把 origin 换成你的域名):
-  ```json
-  [{ "AllowedOrigins": ["https://你的域名.vercel.app"], "AllowedMethods": ["GET","HEAD","PUT"], "AllowedHeaders": ["*"], "ExposeHeaders": ["content-length"], "MaxAgeSeconds": 3600 }]
-  ```
-- **或 wrangler**:`wrangler r2 bucket cors set <桶名> --file cors.json`(wrangler 走自己的 OAuth 登录,权限与 S3 access key 独立)。
+- 用户身份来自飞书 `open_id`，写入 HMAC 签名 cookie。
+- 所有任务、取消和作品库读取都按当前登录用户的 `open_id` 过滤。
+- Supabase `service_role`、R2 密钥、Modal / fal.ai / OpenRouter / ComfyUI 密钥、`CRON_SECRET` 只在服务端使用。
+- R2 bucket 保持私有；浏览器只拿短期签名访问链接。
+- 对于由 URL 下载的 Modal / fal 输出文件，系统要求 HTTPS、可信域名和安全 DNS；OpenRouter / ComfyUI 的图片由服务端直接保存到 R2。
+- 系统限制单个用户同时最多 3 个排队 / 生成中任务，60 秒内最多提交 10 个任务，避免误提交大量任务。
 
-> 两个辅助脚本(`scripts/setup-r2-cors.mjs`、`scripts/push-env-to-vercel.sh`)的完整前置与用法都写在脚本顶部注释里。
+## 第二部分：美术 / 设计使用
 
-## 部署(从零到上线)
+### 可以做什么
 
-> 门户**不需要 Modal 账号**。按顺序走一遍即可上线。
+工作台只有三个入口：图片、3D、视频。每个入口只需要选择一个预设工作流，再填写文字描述。使用同学不用接触底层服务、密钥、上传口令或后台迁移参数。
 
-### 1. 开账号(都要新申请)
-
-| 服务 | 用途 | 要拿到的值 |
+| 入口 | 适合做什么 | 输出结果 |
 |---|---|---|
-| GitHub | 放代码 | 一个 private 仓库 |
-| 飞书开放平台 | 网页应用 OAuth 登录 | `App ID` / `App Secret` |
-| Supabase | 画廊索引库 | `Project URL` / `service_role key` |
-| Cloudflare R2 | 存作品图 | `Account ID` / `Access Key ID` / `Secret` / 桶名 |
-| Vercel | 部署门户 | 用 GitHub 登录即可 |
+| 图片 | 角色设定、场景氛围、宣传图、参考图 | 图片文件 |
+| 3D | 道具、角色、场景模型草案 | 3D 模型文件，可能带预览图 |
+| 视频 | 镜头运动、氛围短片、动态概念 | 视频文件，可能带封面图 |
 
-另外用 `openssl rand -hex 32` 生成一串 `SESSION_SECRET`(同时用于会话 cookie 与 upload-token 的 HMAC 签名;轮换它即可让所有旧 upload-token 失效)。
+### 提交后会发生什么
 
-### 2. Supabase 建库 + 跑迁移
+提交后，网站会显示任务状态。云端服务器会在后台继续处理；即使关闭页面，后台也会定时检查未完成任务。任务完成并保存到作品库后，再次打开网站就能看到结果。
 
-1. supabase.com 建项目（记下数据库密码）。
-2. 左侧 **SQL Editor** → 新建查询 → 把 `supabase/migrations/0001_gallery_items.sql` 内容贴进去 → **Run**。
-3. 左侧 **Settings → API** 复制 `Project URL`、`service_role`（机密）。
+常见状态：
 
-### 3. Cloudflare R2 建桶 + CORS
+| 状态 | 含义 |
+|---|---|
+| 排队中 | 已提交，等待云端服务器处理 |
+| 生成中 | 云端服务器正在生成 |
+| 已完成 | 作品已保存，可以在个人作品库查看 |
+| 失败 | 本次没有成功，可截图并联系部署 / 运营同学排查 |
+| 已取消 | 仅图片服务选 Modal 时，任务已向云端发送取消请求 |
 
-1. R2 → 开通（绑卡,有免费额度）→ Create bucket（桶名 = `R2_BUCKET`）。
-2. 进桶 **Settings → CORS Policy**，贴（拿到 Vercel 域名后把 origin 换成实际域名）。
-   `AllowedMethods` 必须含 `PUT`，否则插件 presigned-PUT 直传会被 CORS 挡:
-   ```json
-   [{ "AllowedOrigins": ["https://你的域名.vercel.app"], "AllowedMethods": ["GET","HEAD","PUT"], "AllowedHeaders": ["*"], "ExposeHeaders": ["content-length"], "MaxAgeSeconds": 3600 }]
-   ```
-3. R2 概览页复制 **Account ID**；**Manage R2 API Tokens** → Create → 拿 `Access Key ID` + `Secret Access Key`（只显示一次,立刻存好）。
+### 取消说明
 
-### 4. 飞书网页应用 + OAuth
+当图片服务选 Modal 时，图片任务支持服务端取消。fal.ai、OpenRouter、ComfyUI 以及 3D / 视频目前不提供“假取消”：如果云端服务本身不支持安全停止，页面不会假装任务已经停止，也不承诺能中止云端正在跑的任务。
 
-1. open.feishu.cn 开发者后台 → 创建企业自建应用。
-2. 开通「**网页应用**」能力；按提示授予「获取用户基本信息（姓名/头像/open_id）」所需权限。
-3. **安全设置 → 重定向 URL** 先留空,部署后回填 `https://你的域名.vercel.app/api/auth/lark/callback`。
-4. **凭证与基础信息** 复制 `App ID` / `App Secret`。
+### 使用建议
 
-### 5. 填环境变量
-
-- **本地**：`bash scripts/setup-env.sh`，或手编 `.env.local`。
-- **生产**：Vercel 项目 **Settings → Environment Variables** 逐条填（同一批值）。变量清单见 [`.env.example`](./.env.example)；`LARK_REDIRECT_URI` = 上面那个 callback URL。
-
-### 6. push + Vercel 部署
-
-1. 代码 push 到你的 GitHub 仓库。
-2. vercel.com → Add New → Project → Import 该仓库。
-3. 在 **Environment Variables** 填第 5 步那批变量 → **Deploy**。
-4. 拿到 `https://xxx.vercel.app`。
-
-### 7. 部署后回填（重要,漏了会登录失败/图片裂）
-
-- 飞书 **重定向 URL** 填 `https://xxx.vercel.app/api/auth/lark/callback`，并确保 `LARK_REDIRECT_URI` 与之一致。
-- R2 **CORS** 的 `AllowedOrigins` 换成实际 Vercel 域名。
-
-### 8. 验证
-
-打开网址 → 「用飞书登录」→ 授权 → 进门户。画廊此刻为空,等美术同学用 Modal Bridge 出图回写后出现。
-
-## 让产物进画廊（门户 ↔ 插件对接约定）
-
-走 **presigned-PUT**:美术同学先登录门户(portal),复制顶部「ComfyUI Modal Bridge 插件配置」区里那串 **upload-token**(绑本人 `open_id`、长期有效),填进插件的「门户 upload token」。**插件不需要任何 R2 凭据,也不传 open_id**。
-
-出图后插件分两步:
-
-```
-① 换预签名 PUT URL（门户验 token → 推导 open_id → 写索引 → 签 URL）
-POST https://你的域名/api/gallery/upload-url
-Authorization: Bearer <upload-token>
-Content-Type: application/json
-
-{ "prompt": "...", "ext": "png" }     # ext 默认 png,白名单 png/jpg/webp/mp4/glb
-→ 200 { "uploadUrl": "https://...r2...", "r2_key": "ou_xxx/<uuid>.png" }
-
-② 把图直传 R2（10 分钟内有效,Content-Type 须与 ext 对应)
-PUT <uploadUrl>
-Content-Type: image/png
-<二进制图像数据>
-```
-
-`open_id` 由门户从 token 签名推导(客户端无法冒名)、`r2_key` 由门户**强制成 `<open_id>/<uuid>.<ext>`**(只能写本人前缀)、索引由门户写入。插件只管「换 URL + PUT」,不碰 Supabase、不持 R2 凭据。
-
-> **信任假设(internal trust assumption)**:presigned-PUT 已让**每个人只能写自己 `open_id` 前缀下的对象**(key 由服务端强制),且**不再下发任何 R2 凭据**给插件 —— 冒名 / 凭据泄露面已大幅收紧。剩余假设是 **upload-token 本身要妥善保管**:它长期有效,泄露后持有者可往泄露者本人前缀写图(只能冒充本人,无法冒充他人)。需要作废时,泄露者重新登录门户、并轮换服务端 `SESSION_SECRET`(HMAC 密钥),所有旧 upload-token 随之失效,各人重登复制新 token 即可。
-
-## 环境变量与密钥安全
-
-完整清单见 [`.env.example`](./.env.example)。**密钥永不进 git**（`.gitignore` 已拦截所有 `.env*`）；本地填 `.env.local`，生产填 Vercel 的 Environment Variables，两处都不经过版本库。
+- 先用短 prompt 探索方向，再逐步补充细节。
+- 等待任务时不要重复快速提交同一个 prompt。
+- 同一方向可以保留几版结果，方便和同事讨论。
+- 不要在 prompt 里写公司密钥、账号密码或不能外传的信息。
+- 遇到失败时，保存截图、入口类型、prompt 和任务时间，方便部署 / 运营同学排查。

@@ -21,3 +21,6 @@
 
 # claude
 .claude*
+
+# local Codex/agent runtime cache
+/.omc

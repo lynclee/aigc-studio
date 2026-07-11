@@ -58,7 +58,7 @@ export default async function HomePage({
             AIGC Studio
           </h1>
           <p className="mt-2 text-sm text-neutral-400">
-            美术同学的 AIGC 配套门户 · 作品画廊
+            给美术/设计同学的创作入口
           </p>
         </div>
 
@@ -82,7 +82,7 @@ export default async function HomePage({
       </div>
 
       <p className="absolute bottom-6 text-xs text-neutral-600">
-        出图在 ComfyUI Desktop 插件,本门户仅作登录与作品浏览
+        选择图片、3D 或视频预设,填写描述后提交,云端生成结果进入你的作品库
       </p>
     </main>
   )
