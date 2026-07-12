@@ -100,6 +100,88 @@ const MEDIA_CONFIGS: MediaConfig[] = [
   },
 ]
 
+// 图片生成的可选参数控件(尺寸/宽高比/参考图)。只对 image 类型渲染。
+const ASPECT_RATIOS = [
+  { value: "1:1", label: "1:1" },
+  { value: "16:9", label: "16:9" },
+  { value: "9:16", label: "9:16" },
+  { value: "4:3", label: "4:3" },
+  { value: "3:4", label: "3:4" },
+]
+
+const IMAGE_SIZES = [
+  { value: "standard", label: "标准", base: 1024 },
+  { value: "hd", label: "高清", base: 1536 },
+]
+
+const MAX_REFERENCE_IMAGES = 4
+const MAX_REFERENCE_BYTES = 3 * 1024 * 1024
+// 只有「标准出图」(z_image_turbo)有图生图变体;detail 是文生图,不接受参考图。
+const I2I_WORKFLOW = "standard"
+// 后端 input.ts 只接受 png/jpeg/webp/gif 的 base64 data-uri;这里同步限制,避免选了别的类型被 400。
+const ACCEPTED_REFERENCE_TYPES = "image/png,image/jpeg,image/webp,image/gif"
+
+type ReferenceImage = { name: string; image: string }
+
+type WorkbenchFormState = {
+  workflow: string
+  prompt: string
+  aspectRatio: string
+  size: string
+  referenceImages: ReferenceImage[]
+}
+
+function createFormState(workflow: string): WorkbenchFormState {
+  return { workflow, prompt: "", aspectRatio: "1:1", size: "standard", referenceImages: [] }
+}
+
+function roundTo64(value: number): number {
+  return Math.max(64, Math.round(value / 64) * 64)
+}
+
+// 由宽高比 + 尺寸档在客户端算出 width/height 直接发给后端(后端 round64 + 上钳 4096 再兜底)。
+function computeImageDimensions(aspectRatio: string, size: string): { width: number; height: number } | null {
+  const sizeDef = IMAGE_SIZES.find((item) => item.value === size) ?? IMAGE_SIZES[0]
+  const [rw, rh] = aspectRatio.split(":").map(Number)
+  if (!rw || !rh) return null
+  const ratio = rw / rh
+  const width = ratio >= 1 ? sizeDef.base : Math.round(sizeDef.base * ratio)
+  const height = ratio >= 1 ? Math.round(sizeDef.base / ratio) : sizeDef.base
+  return { width: roundTo64(width), height: roundTo64(height) }
+}
+
+function buildSubmitBody(config: MediaConfig, form: WorkbenchFormState, prompt: string): RawRecord {
+  const body: RawRecord = { prompt, workflow: form.workflow, mediaType: config.type }
+  if (config.type === "image") {
+    const dimensions = computeImageDimensions(form.aspectRatio, form.size)
+    if (dimensions) {
+      body.width = dimensions.width
+      body.height = dimensions.height
+    }
+    if (form.workflow === I2I_WORKFLOW && form.referenceImages.length > 0) {
+      body.images = form.referenceImages
+    }
+  }
+  return body
+}
+
+function readFileAsDataUri(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null)
+    reader.onerror = () => resolve(null)
+    reader.readAsDataURL(file)
+  })
+}
+
+function optionSegClass(active: boolean): string {
+  return `rounded-lg border px-3 py-1.5 text-xs transition ${
+    active
+      ? "border-indigo-400/70 bg-indigo-500/20 text-white"
+      : "border-white/10 bg-neutral-950 text-neutral-400 hover:text-white"
+  }`
+}
+
 const STATUS_LABEL: Record<JobStatus, string> = {
   queued: "排队中",
   running: "生成中",
@@ -490,9 +572,9 @@ export function PortalWorkbench({
     Object.fromEntries(
       MEDIA_CONFIGS.map((config) => [
         config.type,
-        { workflow: config.workflows[0]?.value ?? "standard", prompt: "" },
+        createFormState(config.workflows[0]?.value ?? "standard"),
       ]),
-    ) as Record<MediaType, { workflow: string; prompt: string }>,
+    ) as Record<MediaType, WorkbenchFormState>,
   )
   const [submitting, setSubmitting] = useState<MediaType | null>(null)
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null)
@@ -598,7 +680,7 @@ export function PortalWorkbench({
       const response = await fetch(config.route, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, workflow: form.workflow, mediaType: config.type }),
+        body: JSON.stringify(buildSubmitBody(config, form, prompt)),
       })
       const payload = await readJsonSafely(response)
       if (!response.ok) {
@@ -622,7 +704,7 @@ export function PortalWorkbench({
       ])
       setForms((current) => ({
         ...current,
-        [config.type]: { ...current[config.type], prompt: "" },
+        [config.type]: { ...current[config.type], prompt: "", referenceImages: [] },
       }))
     } catch (error) {
       const tempId = `local-${config.type}-${Date.now()}`
@@ -779,14 +861,27 @@ function EntryCard({
   onSubmit,
 }: {
   config: MediaConfig
-  form: { workflow: string; prompt: string }
+  form: WorkbenchFormState
   isSubmitting: boolean
-  onChange: (next: Partial<{ workflow: string; prompt: string }>) => void
+  onChange: (next: Partial<WorkbenchFormState>) => void
   onSubmit: () => void
 }) {
   const Icon = config.icon
   const selectedWorkflow = config.workflows.find((item) => item.value === form.workflow)
   const canSubmit = form.prompt.trim().length > 0 && !isSubmitting
+
+  async function handleReferenceFiles(files: FileList | null) {
+    if (!files || files.length === 0) return
+    const remaining = MAX_REFERENCE_IMAGES - form.referenceImages.length
+    if (remaining <= 0) return
+    const loaded: ReferenceImage[] = []
+    for (const file of Array.from(files).slice(0, remaining)) {
+      if (!file.type.startsWith("image/") || file.size > MAX_REFERENCE_BYTES) continue
+      const dataUri = await readFileAsDataUri(file)
+      if (dataUri) loaded.push({ name: file.name, image: dataUri })
+    }
+    if (loaded.length > 0) onChange({ referenceImages: [...form.referenceImages, ...loaded] })
+  }
 
   return (
     <article className="flex min-h-[25rem] flex-col rounded-3xl border border-white/10 bg-neutral-900/70 p-5 shadow-xl shadow-black/10">
@@ -816,6 +911,85 @@ function EntryCard({
         ))}
       </select>
       {selectedWorkflow && <p className="mt-2 text-xs text-neutral-500">{selectedWorkflow.hint}</p>}
+
+      {config.type === "image" && (
+        <div className="mt-5 space-y-4">
+          <div>
+            <span className="text-xs font-medium text-neutral-300">宽高比</span>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {ASPECT_RATIOS.map((ratio) => (
+                <button
+                  key={ratio.value}
+                  type="button"
+                  onClick={() => onChange({ aspectRatio: ratio.value })}
+                  className={optionSegClass(form.aspectRatio === ratio.value)}
+                >
+                  {ratio.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <span className="text-xs font-medium text-neutral-300">尺寸</span>
+            <div className="mt-2 flex gap-2">
+              {IMAGE_SIZES.map((size) => (
+                <button
+                  key={size.value}
+                  type="button"
+                  onClick={() => onChange({ size: size.value })}
+                  className={optionSegClass(form.size === size.value)}
+                >
+                  {size.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {form.workflow === I2I_WORKFLOW && (
+          <div>
+            <span className="text-xs font-medium text-neutral-300">参考图（可选，图生图）</span>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {form.referenceImages.map((image, index) => (
+                <div
+                  key={index}
+                  className="relative h-14 w-14 overflow-hidden rounded-lg border border-white/10"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={image.image} alt={image.name} className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onChange({ referenceImages: form.referenceImages.filter((_, i) => i !== index) })
+                    }
+                    className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/70 text-[10px] text-white"
+                    aria-label="移除参考图"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              {form.referenceImages.length < MAX_REFERENCE_IMAGES && (
+                <label className="flex h-14 w-14 cursor-pointer items-center justify-center rounded-lg border border-dashed border-white/15 text-lg text-neutral-500 transition hover:border-indigo-400/60 hover:text-neutral-300">
+                  +
+                  <input
+                    type="file"
+                    accept={ACCEPTED_REFERENCE_TYPES}
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                      void handleReferenceFiles(event.target.files)
+                      event.target.value = ""
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+            <p className="mt-1.5 text-xs text-neutral-500">
+              上传后按图生图出图 · 最多 {MAX_REFERENCE_IMAGES} 张 · 单张 ≤3MB
+            </p>
+          </div>
+          )}
+        </div>
+      )}
 
       <label className="mt-5 text-xs font-medium text-neutral-300" htmlFor={`${config.type}-prompt`}>
         提示词
