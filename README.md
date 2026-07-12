@@ -97,9 +97,10 @@ supabase/migrations/0002_aigc_jobs_generations_assets.sql
 supabase/migrations/0003_rename_legacy_user_columns.sql
 supabase/migrations/0004_aigc_job_uploads.sql
 supabase/migrations/0005_finalize_job_assets.sql
+supabase/migrations/0006_harden_finalize_job_assets.sql
 ```
 
-当前流程使用 `aigc_jobs`、`aigc_generations`、`aigc_assets` 三张表，以 Supabase 登录用户的 `user_id` 做作品归属;`0004` 增加 `aigc_job_uploads`(Modal Bridge aigc-r2 交付的在途上传台账 + 孤儿清理)。`0003` 仅帮助已有旧库把原来的归属字段改名；新项目执行后不会额外改变数据。**已有旧版数据库不要重新执行 0001 或 0002**；先备份，只执行 `0003_rename_legacy_user_columns.sql`。
+当前流程使用 `aigc_jobs`、`aigc_generations`、`aigc_assets` 三张表，以 Supabase 登录用户的 `user_id` 做作品归属;`0004` 增加上传台账，`0005` 增加原子 finalize RPC，`0006` 为已执行旧版 `0005` 的数据库补上租约 fencing 与权限加固。**已有旧版数据库不要重新执行历史 migration**；先备份，只补执行未跑过的 migration。
 
 Cloudflare R2 是正式作品库。生成服务返回的文件会先安全地存入 R2，再进入个人作品库。图片可选 Modal、OpenRouter、fal 或自建 ComfyUI；3D 与视频使用 fal。普通使用者不会看到、更不能选择这些服务。
 

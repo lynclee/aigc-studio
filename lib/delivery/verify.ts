@@ -55,7 +55,11 @@ export interface VerifiedAsset {
 
 const MAX_MANIFEST_ASSETS = 32
 
-export async function verifyDeliveredAssets(job: AigcJobRecord, manifest: unknown[]): Promise<VerifiedAsset[]> {
+export async function verifyDeliveredAssets(
+  job: AigcJobRecord,
+  manifest: unknown[],
+  options: { beforeCopy?: () => Promise<void> } = {},
+): Promise<VerifiedAsset[]> {
   if (!getR2Env()) throw new DeliveryStorageUnconfiguredError()
   if (!Array.isArray(manifest) || manifest.length === 0) throw new DeliveryVerifyError("empty_manifest")
   if (manifest.length > MAX_MANIFEST_ASSETS) throw new DeliveryVerifyError("manifest_too_large")
@@ -129,6 +133,7 @@ export async function verifyDeliveredAssets(job: AigcJobRecord, manifest: unknow
   // 阶段 2:全部核验通过后再统一 Copy staging → final(final 从不发 PUT → 不可覆写)。
   const results: VerifiedAsset[] = []
   for (const plan of plans) {
+    await options.beforeCopy?.()
     const copied = await copyObject({
       sourceKey: plan.stagingKey,
       destKey: plan.finalKey,

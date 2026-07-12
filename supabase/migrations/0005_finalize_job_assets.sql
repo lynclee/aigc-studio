@@ -31,6 +31,7 @@ begin
     from public.aigc_jobs
     where id = p_job_id
       and reconcile_token = p_reconcile_token
+      and reconcile_lease_until > now()
       and status in ('queued', 'running')
     for update;
   if not found then

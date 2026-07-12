@@ -11,7 +11,7 @@
 
 import { NextResponse } from "next/server"
 import { parseJsonObject } from "@/lib/jobs/api"
-import { claimJobForReconcile, finalizeJobWithAssets, getOwnedJob, releaseClaimedJob, terminalStatus } from "@/lib/jobs/store"
+import { claimJobForReconcile, finalizeJobWithAssets, getOwnedJob, releaseClaimedJob, renewClaimedJobLease, terminalStatus } from "@/lib/jobs/store"
 import { verifyDeliveryToken } from "@/lib/delivery/token"
 import { markUploadsRecorded } from "@/lib/delivery/uploads"
 import { deliveryError, mapInternalError } from "@/lib/delivery/http"
@@ -44,7 +44,9 @@ export async function POST(req: Request): Promise<NextResponse> {
 
     let verified
     try {
-      verified = await verifyDeliveredAssets(claimed, manifest)
+      verified = await verifyDeliveredAssets(claimed, manifest, {
+        beforeCopy: () => renewClaimedJobLease(claimed),
+      })
     } catch (error) {
       await releaseClaimedJob(claimed).catch(() => {})
       if (error instanceof DeliveryStorageUnconfiguredError) return deliveryError(503, "storage_unconfigured")

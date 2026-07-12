@@ -10,6 +10,7 @@ import {
   getGenerationForJob,
   getOwnedJob,
   releaseClaimedJob,
+  renewClaimedJobLease,
   terminalStatus,
   updateClaimedJobFromProviderStatus,
 } from "@/lib/jobs/store"
@@ -50,7 +51,9 @@ export async function reconcileJob(job: AigcJobRecord): Promise<ReconcileResult>
 
   let providerStatus: ProviderStatusResult
   try {
-    providerStatus = await pollProviderStatus(claimedJob)
+    providerStatus = await pollProviderStatus(claimedJob, {
+      beforeAssetCopy: () => renewClaimedJobLease(claimedJob),
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (isTransientProviderPollError(error)) {

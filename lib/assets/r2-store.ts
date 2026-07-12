@@ -63,6 +63,7 @@ export async function storeProviderAssetsInR2(params: {
   jobId: string;
   kind: AigcKind;
   assets: ProviderOutputAsset[];
+  keyVersion?: string;
 }): Promise<StoredAsset[]> {
   const r2 = getR2Client();
   if (!r2) {
@@ -82,7 +83,14 @@ export async function storeProviderAssetsInR2(params: {
     const category = assetCategory(params.kind, asset.assetType);
     const downloaded = await downloadProviderAsset(url, category);
     const ext = extensionFor(downloaded.contentType, url.pathname);
-    const key = `${params.userId}/${params.jobId}/${asset.assetType}-${asset.position}.${ext}`;
+    const key = providerAssetKey({
+      userId: params.userId,
+      jobId: params.jobId,
+      assetType: asset.assetType,
+      position: asset.position,
+      ext,
+      keyVersion: params.keyVersion,
+    });
 
     try {
       await r2.client.send(
@@ -105,6 +113,22 @@ export async function storeProviderAssetsInR2(params: {
     stored.push({ ...asset, r2Key: key, contentType: downloaded.contentType });
   }
   return stored;
+}
+
+function safeKeyVersion(value: string | undefined): string {
+  return (value ?? "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+}
+
+export function providerAssetKey(params: {
+  userId: string;
+  jobId: string;
+  assetType: string;
+  position: number;
+  ext: string;
+  keyVersion?: string;
+}): string {
+  const version = safeKeyVersion(params.keyVersion);
+  return `${params.userId}/${params.jobId}/${params.assetType}-${params.position}${version ? `-${version}` : ""}.${params.ext}`;
 }
 
 async function validateProviderAssetUrl(rawUrl: string): Promise<URL> {

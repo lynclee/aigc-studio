@@ -88,14 +88,17 @@ export async function submitModalBridge(
   }
 }
 
-export async function getModalBridgeStatus(job: AigcJobRecord): Promise<ProviderStatusResult> {
+export async function getModalBridgeStatus(
+  job: AigcJobRecord,
+  beforeAssetCopy?: () => Promise<void>,
+): Promise<ProviderStatusResult> {
   const config = getConfig()
   if (!job.provider_job_id) throw new Error("job missing provider_job_id")
   const response = await fetchJson(
     `${bridgeUrl(config, "status")}?job_id=${encodeURIComponent(job.provider_job_id)}&key=${encodeURIComponent(config.key)}`,
     { method: "GET" },
   )
-  return mapBridgeStatus(job, response)
+  return mapBridgeStatus(job, response, beforeAssetCopy)
 }
 
 export async function cancelModalBridge(job: AigcJobRecord): Promise<Record<string, unknown>> {
@@ -111,6 +114,7 @@ export async function cancelModalBridge(job: AigcJobRecord): Promise<Record<stri
 async function mapBridgeStatus(
   job: AigcJobRecord,
   response: Record<string, unknown>,
+  beforeAssetCopy?: () => Promise<void>,
 ): Promise<ProviderStatusResult> {
   const raw = (firstString(response.status) ?? "").toLowerCase()
 
@@ -134,7 +138,7 @@ async function mapBridgeStatus(
       return { status: "failed", response, error: "Modal Bridge completed without a delivery manifest", assets: [] }
     }
     try {
-      const verified = await verifyDeliveredAssets(job, manifest)
+      const verified = await verifyDeliveredAssets(job, manifest, { beforeCopy: beforeAssetCopy })
       return { status: "succeeded", response, assets: verified.map((v) => v.output) }
     } catch (error) {
       // manifest 本身有问题(shape/前缀/size/类型)→ 永久失败。

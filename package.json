@@ -28,5 +28,11 @@
     "tailwindcss": "^3.4.17",
     "typescript": "^5.1.0",
     "vitest": "^3.2.7"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-darwin-arm64": "4.62.2",
+    "@rollup/rollup-darwin-x64": "4.62.2",
+    "@rollup/rollup-linux-arm64-gnu": "4.62.2",
+    "@rollup/rollup-linux-x64-gnu": "4.62.2"
   }
 }

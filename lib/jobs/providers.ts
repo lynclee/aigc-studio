@@ -90,14 +90,17 @@ export async function submitProvider(
   }
 }
 
-export async function pollProviderStatus(job: AigcJobRecord): Promise<ProviderStatusResult> {
+export async function pollProviderStatus(
+  job: AigcJobRecord,
+  ctx: { beforeAssetCopy?: () => Promise<void> } = {},
+): Promise<ProviderStatusResult> {
   switch (job.provider) {
     case "modal-image":
       assertProviderKind(job, "image")
       return getModalImageStatus(job)
     case "modal-bridge":
       // kind 通用(image/video/model3d),按 job.kind 核验,不限定单一 kind。
-      return getModalBridgeStatus(job)
+      return getModalBridgeStatus(job, ctx.beforeAssetCopy)
     case "openrouter-image":
       assertProviderKind(job, "image")
       return getOpenRouterImageStatus(job)

@@ -117,6 +117,11 @@ export type ClaimedAigcJobRecord = AigcJobRecord & {
 
 const RECONCILE_LEASE_MS = 5 * 60_000
 
+export class JobLeaseLostError extends Error {
+  readonly status = 409
+  readonly code = "reconcile_lease_lost"
+}
+
 export async function claimJobForReconcile(job: AigcJobRecord): Promise<ClaimedAigcJobRecord | null> {
   if (terminalStatus(job.status) || !job.provider_job_id) return null
 
@@ -138,6 +143,22 @@ export async function claimJobForReconcile(job: AigcJobRecord): Promise<ClaimedA
     .maybeSingle()
   if (error) throw new BackendStoreError(`claim job failed: ${error.message}`)
   return (data as ClaimedAigcJobRecord | null) ?? null
+}
+
+/** Renew the current fencing lease before another external side effect. */
+export async function renewClaimedJobLease(job: ClaimedAigcJobRecord): Promise<void> {
+  const admin = requireAigcAdmin()
+  const leaseUntil = new Date(Date.now() + RECONCILE_LEASE_MS).toISOString()
+  const { data, error } = await admin
+    .from("aigc_jobs")
+    .update({ reconcile_lease_until: leaseUntil, updated_at: new Date().toISOString() })
+    .eq("id", job.id)
+    .eq("reconcile_token", job.reconcile_token)
+    .in("status", ["queued", "running"])
+    .select("id")
+    .maybeSingle()
+  if (error) throw new BackendStoreError(`renew job lease failed: ${error.message}`)
+  if (!data) throw new JobLeaseLostError("Reconcile lease was lost before asset persistence.")
 }
 
 export async function updateClaimedJobFromProviderStatus(
@@ -230,8 +251,8 @@ function sanitizeStoredError(message: string): string {
   }
   // 2. 常见 credential 模式:*_key / token / secret / authorization = 值,以及 bearer 令牌。
   out = out
-    .replace(/\b([\w-]*(?:key|token|secret|password|authorization))\b\s*[:=]\s*[^\s,;"']+/gi, "$1=[redacted]")
     .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]+/gi, "bearer [redacted]")
+    .replace(/\b([\w-]*(?:key|token|secret|password|authorization))\b\s*[:=]\s*[^\s,;"']+/gi, "$1=[redacted]")
     .replace(/https?:\/\/\S+/g, "[url]")
   return out.slice(0, 500)
 }
@@ -251,16 +272,15 @@ function isSecretKeyName(key: string): boolean {
 
 // 深度脱敏 provider_response:① 抹已知 env 密钥的精确值;② 按字段名屏蔽疑似密钥字段。
 // provider_response 会落 aigc_jobs 并复制进 generation.metadata,不脱敏则密钥回显会进 DB(F3/M6)。
-function redactObjectSecrets<T>(value: T): T {
+export function redactObjectSecrets<T>(value: T): T {
   const secrets = SANITIZE_SECRET_ENV_NAMES.map((name) => process.env[name]).filter(
     (v): v is string => typeof v === "string" && v.length >= 8,
   )
   const walk = (input: unknown): unknown => {
     if (typeof input === "string") {
-      if (secrets.length === 0) return input
       let out = input
       for (const secret of secrets) out = out.split(secret).join("[redacted]")
-      return out
+      return sanitizeStoredError(out)
     }
     if (Array.isArray(input)) return input.map(walk)
     if (input && typeof input === "object") {
@@ -342,6 +362,7 @@ export async function finalizeJobWithAssets(
     jobId: job.id,
     kind: job.kind,
     assets,
+    keyVersion: job.reconcile_token,
   })
   if (storedAssets.length === 0) {
     throw new BackendStoreError("materialize assets failed: provider completed without any persistable assets")

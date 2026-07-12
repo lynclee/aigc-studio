@@ -64,7 +64,7 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 | `lib/workflows/registry.ts` | 按 kind 渲染工作流(image=image-registry;video/3D=Bridge API 模板) |
 | `lib/workflows/image-registry.ts` + `templates/*.json` | 图片工作流(含文生图 + 图生图 `z_image_turbo_i2i`);视频/3D 模板(seedance/tripo) |
 | `lib/assets/r2-store.ts` / `lib/r2.ts` | R2 落库(URL 下载 + 字节直存)/ 预签名 GET·PUT / HeadObject / delete |
-| `supabase/migrations/0001-0005` | 0002 主表;0004 `aigc_job_uploads` 在途上传台账;0005 `finalize_job_assets` 原子落库 RPC |
+| `supabase/migrations/0001-0006` | 0002 主表;0004 上传台账;0005 原子落库 RPC;0006 租约 fencing + RPC 权限升级 |
 
 ## 数据模型
 
@@ -74,7 +74,7 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 ## 部署同学必须完成
 
 1. Supabase → Authentication → Providers 启用 GitHub 与 Google,填 Client ID/Secret;两者回调都填 `https://<project-ref>.supabase.co/auth/v1/callback`;Site URL / Redirect URLs 含网站 `/api/auth/callback`(本地加 localhost)。
-2. SQL Editor 顺序执行 `0001`→`0005`;已有旧库先备份,只补执行未跑过的(`0003` 改名、`0004` 上传台账、`0005` `finalize_job_assets` RPC)。
+2. SQL Editor 顺序执行 `0001`→`0006`;已有旧库先备份,只补执行未跑过的。即使已经执行过旧版 `0005`,也必须执行 `0006` 以应用租约 fencing 与 RPC 权限加固。
 3. Vercel 环境变量(完整见 `.env.example`):
    - 基础:`NEXT_PUBLIC_SITE_URL`、两个 Supabase key、`SUPABASE_SERVICE_ROLE_KEY`、`CRON_SECRET`、`R2_*`、`FAL_KEY`。
    - 图片 provider 按选择:Modal Bridge 用 `MODAL_BRIDGE_*` + `BRIDGE_DELIVERY_TOKEN_SECRET`(+ 生产域名有 Deployment Protection 时 `VERCEL_AUTOMATION_BYPASS_SECRET`);其它见 `.env.example`。
