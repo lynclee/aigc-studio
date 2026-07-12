@@ -62,8 +62,20 @@ export async function verifyDeliveredAssets(job: AigcJobRecord, manifest: unknow
 
   const category = categoryForKind(job.kind)
   const seen = new Set<string>()
-  const results: VerifiedAsset[] = []
 
+  // 阶段 1:全部 asset 先做校验 + HEAD staging(纯读,无副作用)。任一失败即抛,尚未 Copy(M8)。
+  type Plan = {
+    assetType: string
+    position: number
+    finalKey: string
+    stagingKey: string
+    contentType: string | undefined
+    stagingEtag: string
+    stagingRawEtag: string
+    size: number
+    sha256?: string
+  }
+  const plans: Plan[] = []
   for (const raw of manifest) {
     if (!isRecord(raw)) throw new DeliveryVerifyError("invalid_asset")
     if (!isValidAssetType(raw.asset_type) || !isAllowedAssetType(job.kind, raw.asset_type)) {
@@ -88,7 +100,6 @@ export async function verifyDeliveredAssets(job: AigcJobRecord, manifest: unknow
     if (!upload) throw new DeliveryVerifyError("asset_not_intaked", 422)
     const finalKey = upload.r2_key
     if (typeof raw.r2_key === "string" && raw.r2_key !== finalKey) throw new DeliveryVerifyError("invalid_r2_key")
-    const contentType = normalizeContentType(upload.content_type) ?? undefined
 
     // C1:HEAD staging(Bridge 上传目标),核验实际字节。
     const stagingKey = stagingKeyForFinal(finalKey)
@@ -99,26 +110,47 @@ export async function verifyDeliveredAssets(job: AigcJobRecord, manifest: unknow
     const stagingEtag = normalizeEtag(head.etag)
     if (!stagingEtag || stagingEtag !== reportedEtag) throw new DeliveryVerifyError("asset_etag_mismatch", 422)
 
-    // C1:Copy staging → final(final 从不发 PUT → 固化后不可覆写)。ETag 前置条件防 HEAD→Copy 间被改。
-    const copied = await copyObject({ sourceKey: stagingKey, destKey: finalKey, sourceIfMatch: head.etag ?? undefined })
-    if (!copied) throw new DeliveryVerifyError("asset_not_found", 422)
-    const finalEtag = normalizeEtag(copied.etag) ?? stagingEtag
+    plans.push({
+      assetType,
+      position,
+      finalKey,
+      stagingKey,
+      contentType: normalizeContentType(upload.content_type) ?? undefined,
+      stagingEtag,
+      stagingRawEtag: head.etag ?? "",
+      size: head.size,
+      ...(typeof raw.checksum_sha256 === "string" ? { sha256: raw.checksum_sha256 } : {}),
+    })
+  }
 
+  // M5:至少要有一个主资产(非纯 preview),避免只交一张 preview 就算成功。
+  if (!plans.some((p) => p.assetType !== "preview")) throw new DeliveryVerifyError("no_primary_asset", 422)
+
+  // 阶段 2:全部核验通过后再统一 Copy staging → final(final 从不发 PUT → 不可覆写)。
+  const results: VerifiedAsset[] = []
+  for (const plan of plans) {
+    const copied = await copyObject({
+      sourceKey: plan.stagingKey,
+      destKey: plan.finalKey,
+      sourceIfMatch: plan.stagingRawEtag || undefined,
+    })
+    if (!copied) throw new DeliveryVerifyError("asset_not_found", 422)
+    const finalEtag = normalizeEtag(copied.etag) ?? plan.stagingEtag
     results.push({
       output: {
-        assetType,
-        position,
-        r2Key: finalKey,
-        contentType,
+        assetType: plan.assetType,
+        position: plan.position,
+        r2Key: plan.finalKey,
+        contentType: plan.contentType,
         metadata: {
           etag: finalEtag,
-          size_bytes: head.size,
-          ...(typeof raw.checksum_sha256 === "string" ? { checksum_sha256: raw.checksum_sha256 } : {}),
+          size_bytes: plan.size,
+          ...(plan.sha256 ? { checksum_sha256: plan.sha256 } : {}),
         },
       },
       etag: finalEtag,
-      sizeBytes: head.size,
-      stagingKey,
+      sizeBytes: plan.size,
+      stagingKey: plan.stagingKey,
     })
   }
 

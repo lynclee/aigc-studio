@@ -40,7 +40,7 @@
   {workflow(按 kind 渲染), auth_key, needs_gpu/gpu_class, delivery:{mode:aigc-r2, job_id, token}}
 Bridge worker 出片 → 逐文件调 /api/internal/asset-intake 换短期预签名 PUT → 直传 R2
   → POST /api/internal/job-complete {assets manifest}
-Vercel job-complete → HeadObject 核验(size/ETag/前缀)→ 领 reconcile 租约 → materialize → succeeded
+Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ Copy staging→final → finalize_job_assets RPC(fence)→ succeeded
   push 丢失时:reconcile 轮询 Bridge /status 拿 delivery.assets manifest 兜底恢复(同一套核验)
 ```
 

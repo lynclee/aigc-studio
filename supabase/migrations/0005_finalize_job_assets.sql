@@ -20,6 +20,7 @@ create or replace function public.finalize_job_assets(
   p_assets jsonb
 ) returns uuid
 language plpgsql
+set search_path = public
 as $$
 declare
   v_generation_id uuid;
@@ -87,3 +88,11 @@ begin
   return v_generation_id;
 end;
 $$;
+
+-- 显式收紧执行权限(M7):只有 service_role 能调用,anon/authenticated/public 一律拒绝。
+revoke execute on function public.finalize_job_assets(
+  uuid, uuid, text, text, text, text, text, text, jsonb, jsonb
+) from public, anon, authenticated;
+grant execute on function public.finalize_job_assets(
+  uuid, uuid, text, text, text, text, text, text, jsonb, jsonb
+) to service_role;

@@ -236,15 +236,28 @@ function sanitizeStoredError(message: string): string {
   return out.slice(0, 500)
 }
 
-// 深度抹掉对象里出现的已知 env 密钥精确值(F3:provider_response 整 JSON 会落 aigc_jobs 并复制到
-// generation.metadata,若某 provider 在响应里回显了密钥,不脱敏就进 DB)。
+// 字段名像密钥的(*_key / *token / *secret / authorization / password …)一律屏蔽其字符串值,
+// 不依赖是否恰等于某个 env 值 —— 能挡住动态签发的 delivery_token / auth_key 等回显(M6)。
+function isSecretKeyName(key: string): boolean {
+  const k = key.toLowerCase()
+  return (
+    k.endsWith("key") ||
+    k.endsWith("token") ||
+    k.endsWith("secret") ||
+    k === "authorization" ||
+    k === "password"
+  )
+}
+
+// 深度脱敏 provider_response:① 抹已知 env 密钥的精确值;② 按字段名屏蔽疑似密钥字段。
+// provider_response 会落 aigc_jobs 并复制进 generation.metadata,不脱敏则密钥回显会进 DB(F3/M6)。
 function redactObjectSecrets<T>(value: T): T {
   const secrets = SANITIZE_SECRET_ENV_NAMES.map((name) => process.env[name]).filter(
     (v): v is string => typeof v === "string" && v.length >= 8,
   )
-  if (secrets.length === 0) return value
   const walk = (input: unknown): unknown => {
     if (typeof input === "string") {
+      if (secrets.length === 0) return input
       let out = input
       for (const secret of secrets) out = out.split(secret).join("[redacted]")
       return out
@@ -252,7 +265,9 @@ function redactObjectSecrets<T>(value: T): T {
     if (Array.isArray(input)) return input.map(walk)
     if (input && typeof input === "object") {
       const result: Record<string, unknown> = {}
-      for (const [key, val] of Object.entries(input)) result[key] = walk(val)
+      for (const [key, val] of Object.entries(input)) {
+        result[key] = isSecretKeyName(key) && typeof val === "string" ? "[redacted]" : walk(val)
+      }
       return result
     }
     return input
@@ -439,7 +454,7 @@ export async function markJobCancelled(job: AigcJobRecord, response: Record<stri
     .from("aigc_jobs")
     .update({
       status: "cancelled",
-      provider_response: response,
+      provider_response: redactObjectSecrets(response),
       updated_at: now,
       completed_at: job.completed_at ?? now,
       reconcile_token: null,

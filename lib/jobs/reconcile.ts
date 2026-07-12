@@ -25,6 +25,11 @@ export type ReconcileResult = {
 // 取 3h:略大于 delivery_token 的 2h 生命周期,过期后本也换不到新上传地址。
 const MAX_JOB_AGE_MS = 3 * 60 * 60 * 1000
 
+function isPastMaxAge(job: AigcJobRecord): boolean {
+  const created = Date.parse(job.created_at)
+  return created > 0 && Date.now() - created > MAX_JOB_AGE_MS
+}
+
 export async function reconcileJob(job: AigcJobRecord): Promise<ReconcileResult> {
   if (terminalStatus(job.status)) {
     if (job.status === "succeeded") {
@@ -49,6 +54,11 @@ export async function reconcileJob(job: AigcJobRecord): Promise<ReconcileResult>
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (isTransientProviderPollError(error)) {
+      // M4:瞬时错误也受最大时长约束,否则持续瞬时失败会永久 running、占满配额。
+      if (isPastMaxAge(claimedJob)) {
+        const failedJob = await failClaimedJob(claimedJob, "job exceeded maximum runtime (persistent provider errors)")
+        return { job: failedJob, generation: null, assets: [], changed: true }
+      }
       const currentJob = await releaseClaimedJob(claimedJob, message)
       return { job: currentJob, generation: null, assets: [], changed: true }
     }
@@ -92,7 +102,7 @@ export async function reconcileJob(job: AigcJobRecord): Promise<ReconcileResult>
   }
 
   // 仍在跑但已超最大时长(state 丢失/永久错误/卡死)→ 明确失败,不无限徘徊(M7)。
-  if (Date.parse(currentJob.created_at) > 0 && Date.now() - Date.parse(currentJob.created_at) > MAX_JOB_AGE_MS) {
+  if (isPastMaxAge(currentJob)) {
     const failedJob = await failClaimedJob(currentJob, "job exceeded maximum runtime")
     return { job: failedJob, generation: null, assets: [], changed: true }
   }
