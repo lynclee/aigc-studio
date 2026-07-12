@@ -4,7 +4,7 @@ import zImageTurboTemplate from "@/lib/workflows/templates/z_image_turbo.json"
 import zImageTurboI2iTemplate from "@/lib/workflows/templates/z_image_turbo_i2i.json"
 import flux2KleinTemplate from "@/lib/workflows/templates/flux2_klein.json"
 
-export type ImageWorkflowId = "z_image_turbo" | "flux2_klein"
+export type ImageWorkflowId = "z_image_turbo" | "z_image_turbo_i2i" | "flux2_klein"
 
 type ModalGpu = "L40S" | "A100" | "A100-40GB" | "A100-80GB" | "H100" | string
 
@@ -14,6 +14,7 @@ type GpuClass = "cpu" | "cheap" | "primary" | "top"
 
 type ImageWorkflowConfig = {
   id: ImageWorkflowId
+  templateVersion: string
   aliases: string[]
   gpu?: ModalGpu
   needsGpu?: boolean
@@ -21,6 +22,7 @@ type ImageWorkflowConfig = {
   template: unknown
   // 有参考图时用的图生图变体(同一模型 + 核心节点 LoadImage/VAEEncode)。没有则该工作流不支持图生图。
   i2iTemplate?: unknown
+  i2iId?: ImageWorkflowId
 }
 
 type RenderImageWorkflowParams = {
@@ -30,6 +32,7 @@ type RenderImageWorkflowParams = {
 
 export type RenderedImageWorkflow = {
   id: ImageWorkflowId
+  templateVersion: string
   workflow: Record<string, unknown>
   gpu?: ModalGpu
   needsGpu?: boolean
@@ -46,14 +49,17 @@ const SEED_MAX = 0x100000000
 const WORKFLOWS: ImageWorkflowConfig[] = [
   {
     id: "z_image_turbo",
+    templateVersion: "1",
     aliases: ["standard", "fast", "z_image_turbo"],
     needsGpu: true,
     gpuClass: "primary",
     template: zImageTurboTemplate,
     i2iTemplate: zImageTurboI2iTemplate,
+    i2iId: "z_image_turbo_i2i",
   },
   {
     id: "flux2_klein",
+    templateVersion: "1",
     aliases: ["detail", "detailed", "quality", "flux2_klein"],
     needsGpu: true,
     gpuClass: "primary",
@@ -83,7 +89,8 @@ export function renderImageWorkflow(params: RenderImageWorkflowParams): Rendered
     : null
   if (!workflow) throw new Error(`image workflow '${config.id}' template missing input.workflow after render`)
   return {
-    id: config.id,
+    id: config.i2iTemplate && config.i2iId && referenceName ? config.i2iId : config.id,
+    templateVersion: config.templateVersion,
     workflow,
     gpu: config.gpu,
     needsGpu: config.needsGpu,

@@ -21,6 +21,7 @@ import {
   submitOpenRouterImage,
 } from "@/lib/engines/openrouter-image"
 import { ProviderConfigurationError, ProviderContractError } from "@/lib/engines/provider-utils"
+import type { WorkflowProvider } from "@/lib/workflows/capabilities"
 
 // 各创作类型的后端优先/默认:图片 Modal → OpenRouter → fal;视频/3D 目前默认 fal,可切 modal-bridge。
 // 这不是自动 fallback;实际用哪个只由对应的 AIGC_*_PROVIDER 决定。
@@ -29,7 +30,7 @@ type ImageProvider = "modal-image" | "modal-bridge" | "openrouter-image" | "fal-
 type VideoProvider = "modal-bridge" | "fal-video"
 type Model3dProvider = "modal-bridge" | "fal-model3d"
 
-type ProviderName = ImageProvider | VideoProvider | Model3dProvider
+export type ProviderName = WorkflowProvider
 
 /** 提交时的服务端上下文；modal-bridge 用 jobId 现签 delivery_token,其它 provider 忽略。 */
 export interface SubmitContext {
@@ -42,8 +43,7 @@ export function providerNameForKind(kind: AigcKind): ProviderName {
   return configuredModel3dProvider()
 }
 
-export function ensureProviderConfigured(kind: AigcKind): void {
-  const provider = providerNameForKind(kind)
+export function ensureProviderConfigured(kind: AigcKind, provider: ProviderName = providerNameForKind(kind)): void {
   switch (provider) {
     case "modal-image":
       return ensureModalImageConfigured()
@@ -68,8 +68,8 @@ export async function submitProvider(
   kind: AigcKind,
   request: SubmitRequest,
   ctx: SubmitContext,
+  provider: ProviderName = providerNameForKind(kind),
 ): Promise<ProviderSubmitResult> {
-  const provider = providerNameForKind(kind)
   switch (provider) {
     case "modal-image":
       return submitModalImage(request)

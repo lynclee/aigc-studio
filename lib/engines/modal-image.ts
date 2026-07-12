@@ -57,7 +57,9 @@ export async function submitModalImage(request: SubmitRequest): Promise<Provider
     status: providerStatusFrom(response),
     response: {
       ...response,
-      workflow_id: rendered.id,
+      catalog_workflow_id: request.workflowId,
+      execution_variant: rendered.id,
+      template_version: rendered.templateVersion,
       settings: { width: rendered.width, height: rendered.height, seed: rendered.seed },
     },
   }

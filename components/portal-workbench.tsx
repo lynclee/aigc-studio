@@ -13,6 +13,7 @@ import {
   Sparkles,
   XCircle,
 } from "lucide-react"
+import type { ReferenceCapability, ReferenceCapabilityMap } from "@/lib/workflows/capabilities"
 
 type MediaType = "image" | "model3d" | "video"
 type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled"
@@ -115,12 +116,23 @@ const IMAGE_SIZES = [
 ]
 
 const MAX_REFERENCE_BYTES = 3 * 1024 * 1024
-// 只有「标准出图」(z_image_turbo)有图生图变体;detail 是文生图,不接受参考图。
-const I2I_WORKFLOW = "standard"
+const MAX_REFERENCE_TOTAL_BYTES = 3 * 1024 * 1024
 // 后端 input.ts 只接受 png/jpeg/webp/gif 的 base64 data-uri;这里同步限制,避免选了别的类型被 400。
 const ACCEPTED_REFERENCE_TYPES = "image/png,image/jpeg,image/webp,image/gif"
+const REFERENCE_ROLE_LABELS: Record<string, string> = {
+  reference: "参考",
+  "reference-1": "参考 1",
+  "reference-2": "参考 2",
+  "reference-3": "参考 3",
+  "reference-4": "参考 4",
+  front: "正面",
+  back: "背面",
+  left: "左侧",
+  right: "右侧",
+  side: "侧面",
+}
 
-type ReferenceImage = { name: string; image: string }
+type ReferenceImage = { name: string; image: string; sizeBytes: number }
 
 type WorkbenchFormState = {
   workflow: string
@@ -149,7 +161,12 @@ function computeImageDimensions(aspectRatio: string, size: string): { width: num
   return { width: roundTo64(width), height: roundTo64(height) }
 }
 
-function buildSubmitBody(config: MediaConfig, form: WorkbenchFormState, prompt: string): RawRecord {
+function buildSubmitBody(
+  config: MediaConfig,
+  form: WorkbenchFormState,
+  prompt: string,
+  referenceCapability: ReferenceCapability,
+): RawRecord {
   const body: RawRecord = { prompt, workflow: form.workflow, mediaType: config.type }
   if (config.type === "image") {
     const dimensions = computeImageDimensions(form.aspectRatio, form.size)
@@ -158,16 +175,18 @@ function buildSubmitBody(config: MediaConfig, form: WorkbenchFormState, prompt: 
       body.height = dimensions.height
     }
   }
-  // 参考图:image 仅「标准出图」有图生图变体;video/3D 的工作流都有参考图变体,无条件透传。
-  if (workflowSupportsReference(config.type, form.workflow) && form.referenceImages.length > 0) {
-    body.images = form.referenceImages
+  if (
+    referenceCapability.enabled &&
+    form.referenceImages.length > 0 &&
+    referenceCountAllowed(referenceCapability, form.referenceImages.length)
+  ) {
+    body.images = form.referenceImages.map(({ name, image }) => ({ name, image }))
   }
   return body
 }
 
-// image 只有 z_image_turbo(standard)接受参考图;video/3D(seedance r2v / tripo i2model)都接受。
-function workflowSupportsReference(type: MediaConfig["type"], workflow: string): boolean {
-  return type === "image" ? workflow === I2I_WORKFLOW : true
+function referenceCountAllowed(capability: ReferenceCapability, count: number): boolean {
+  return count === 0 || (capability.enabled && count >= capability.minImages && count <= capability.maxImages)
 }
 
 function readFileAsDataUri(file: File): Promise<string | null> {
@@ -211,6 +230,12 @@ const USER_ERROR_MESSAGES: Record<string, string> = {
   provider_http_error: "云端生成服务暂时不可用，请稍后重试",
   provider_contract_error: "云端生成服务返回异常，请稍后重试",
   invalid_provider_input: "提交内容不符合要求，请检查后重试",
+  reference_images_not_supported: "当前工作流或生成服务不支持参考图",
+  invalid_reference_image_count: "参考图数量不符合当前工作流要求",
+  too_many_reference_images: "参考图数量超过当前工作流上限",
+  reference_image_too_large: "单张参考图过大，请压缩后重试",
+  reference_images_total_too_large: "参考图合计超过 3MB，请压缩后重试",
+  invalid_reference_image: "参考图格式无效，请使用 PNG、JPEG、WebP 或 GIF",
   prompt_required: "请先填写提示词",
   prompt_too_long: "提示词过长，请精简后重试",
   unsupported_workflow: "所选工作流暂不可用，请重新选择",
@@ -569,9 +594,11 @@ async function readJsonSafely(response: Response): Promise<unknown> {
 export function PortalWorkbench({
   userName,
   userAvatar,
+  referenceCapabilities,
 }: {
   userName: string
   userAvatar: string
+  referenceCapabilities: ReferenceCapabilityMap
 }) {
   const [forms, setForms] = useState(() =>
     Object.fromEntries(
@@ -677,15 +704,16 @@ export function PortalWorkbench({
 
   async function submitJob(config: MediaConfig) {
     const form = forms[config.type]
+    const referenceCapability = referenceCapabilities[config.type][form.workflow]
     const prompt = form.prompt.trim()
-    if (!prompt) return
+    if (!prompt || !referenceCapability || !referenceCountAllowed(referenceCapability, form.referenceImages.length)) return
 
     setSubmitting(config.type)
     try {
       const response = await fetch(config.route, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildSubmitBody(config, form, prompt)),
+        body: JSON.stringify(buildSubmitBody(config, form, prompt, referenceCapability)),
       })
       const payload = await readJsonSafely(response)
       if (!response.ok) {
@@ -834,6 +862,7 @@ export function PortalWorkbench({
             <EntryCard
               key={config.type}
               config={config}
+              referenceCapabilities={referenceCapabilities[config.type]}
               form={forms[config.type]}
               isSubmitting={submitting === config.type}
               onChange={(next) =>
@@ -860,12 +889,14 @@ export function PortalWorkbench({
 
 function EntryCard({
   config,
+  referenceCapabilities,
   form,
   isSubmitting,
   onChange,
   onSubmit,
 }: {
   config: MediaConfig
+  referenceCapabilities: Record<string, ReferenceCapability>
   form: WorkbenchFormState
   isSubmitting: boolean
   onChange: (next: Partial<WorkbenchFormState>) => void
@@ -873,31 +904,52 @@ function EntryCard({
 }) {
   const Icon = config.icon
   const selectedWorkflow = config.workflows.find((item) => item.value === form.workflow)
-  const canSubmit = form.prompt.trim().length > 0 && !isSubmitting
-  // 参考图槽上限按类型:3D(tripo i2model)只有 3 个视图槽,image/video 为 4。与后端 input.ts 一致。
-  const maxReference = config.type === "model3d" ? 3 : 4
+  const referenceCapability = referenceCapabilities[form.workflow] ?? {
+    enabled: false,
+    minImages: 0,
+    maxImages: 0,
+    roles: [],
+  }
+  const referenceCountIsValid = referenceCountAllowed(referenceCapability, form.referenceImages.length)
+  const canSubmit = form.prompt.trim().length > 0 && referenceCountIsValid && !isSubmitting
+  const maxReference = referenceCapability.maxImages
+  const [referenceError, setReferenceError] = useState<string | null>(null)
 
   async function handleReferenceFiles(files: FileList | null) {
     if (!files || files.length === 0) return
+    setReferenceError(null)
     const remaining = maxReference - form.referenceImages.length
     if (remaining <= 0) return
     const loaded: ReferenceImage[] = []
+    let totalBytes = form.referenceImages.reduce((total, image) => total + image.sizeBytes, 0)
     for (const file of Array.from(files).slice(0, remaining)) {
-      if (!file.type.startsWith("image/") || file.size > MAX_REFERENCE_BYTES) continue
+      if (!ACCEPTED_REFERENCE_TYPES.split(",").includes(file.type)) {
+        setReferenceError("仅支持 PNG、JPEG、WebP 或 GIF")
+        continue
+      }
+      if (file.size > MAX_REFERENCE_BYTES) {
+        setReferenceError("单张参考图不能超过 3MB")
+        continue
+      }
+      if (totalBytes + file.size > MAX_REFERENCE_TOTAL_BYTES) {
+        setReferenceError("参考图合计不能超过 3MB，请先压缩图片")
+        continue
+      }
       const dataUri = await readFileAsDataUri(file)
-      if (dataUri) loaded.push({ name: file.name, image: dataUri })
+      if (dataUri) {
+        loaded.push({ name: file.name, image: dataUri, sizeBytes: file.size })
+        totalBytes += file.size
+      }
     }
     if (loaded.length > 0) onChange({ referenceImages: [...form.referenceImages, ...loaded] })
   }
 
-  const supportsReference = workflowSupportsReference(config.type, form.workflow)
+  const supportsReference = referenceCapability.enabled
   const referenceLabel = config.type === "model3d" ? "参考图 / 多视图（可选）" : "参考图（可选）"
-  const referenceHint =
-    config.type === "video"
-      ? `上传参考图按参考图生视频 · 最多 ${maxReference} 张 · 单张 ≤3MB`
-      : config.type === "model3d"
-        ? `上传多视图（前/侧/后）按图生 3D · 最多 ${maxReference} 张 · 单张 ≤3MB`
-        : `上传后按图生图出图 · 最多 ${maxReference} 张 · 单张 ≤3MB`
+  const countHint = referenceCapability.minImages === referenceCapability.maxImages
+    ? `当前需完整上传 ${maxReference} 张`
+    : `可上传 ${referenceCapability.minImages}–${maxReference} 张`
+  const referenceHint = `${countHint} · 合计 ≤3MB`
 
   return (
     <article className="flex min-h-[25rem] flex-col rounded-3xl border border-white/10 bg-neutral-900/70 p-5 shadow-xl shadow-black/10">
@@ -917,7 +969,15 @@ function EntryCard({
       <select
         id={`${config.type}-workflow`}
         value={form.workflow}
-        onChange={(event) => onChange({ workflow: event.target.value })}
+        onChange={(event) => {
+          const workflow = event.target.value
+          const nextCapability = referenceCapabilities[workflow]
+          const references = nextCapability?.enabled
+            ? form.referenceImages.slice(0, nextCapability.maxImages)
+            : []
+          setReferenceError(null)
+          onChange({ workflow, referenceImages: references })
+        }}
         className="mt-2 rounded-xl border border-white/10 bg-neutral-950 px-3 py-2.5 text-sm text-white outline-none transition focus:border-indigo-400/70"
       >
         {config.workflows.map((workflow) => (
@@ -974,6 +1034,11 @@ function EntryCard({
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={image.image} alt={image.name} className="h-full w-full object-cover" />
+                {referenceCapability.roles[index] && (
+                  <span className="absolute bottom-0 left-0 right-0 bg-black/75 px-1 py-0.5 text-center text-[9px] text-white">
+                    {REFERENCE_ROLE_LABELS[referenceCapability.roles[index]] ?? referenceCapability.roles[index]}
+                  </span>
+                )}
                 <button
                   type="button"
                   onClick={() =>
@@ -1003,6 +1068,10 @@ function EntryCard({
             )}
           </div>
           <p className="mt-1.5 text-xs text-neutral-500">{referenceHint}</p>
+          {!referenceCountIsValid && form.referenceImages.length > 0 && (
+            <p className="mt-1 text-xs text-amber-300">请按当前工作流要求补齐参考图后再提交</p>
+          )}
+          {referenceError && <p className="mt-1 text-xs text-red-300">{referenceError}</p>}
         </div>
       )}
 

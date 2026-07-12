@@ -173,7 +173,9 @@ export async function updateClaimedJobFromProviderStatus(
     .from("aigc_jobs")
     .update({
       status: statusResult.status === "succeeded" ? "running" : statusResult.status,
-      provider_response: redactObjectSecrets(statusResult.response),
+      // Poll responses are incremental provider state. Preserve immutable submission metadata
+      // (catalog workflow / execution variant / template version) while letting other fresh status keys win.
+      provider_response: mergeProviderResponse(job.provider_response, statusResult.response),
       error: statusResult.error ? sanitizeStoredError(statusResult.error) : null,
       updated_at: now,
       completed_at: terminal ? job.completed_at ?? now : null,
@@ -294,6 +296,17 @@ export function redactObjectSecrets<T>(value: T): T {
     return input
   }
   return walk(value) as T
+}
+
+export function mergeProviderResponse(
+  previous: Record<string, unknown>,
+  latest: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...previous, ...latest }
+  for (const key of ["catalog_workflow_id", "execution_variant", "template_version"] as const) {
+    if (Object.prototype.hasOwnProperty.call(previous, key)) merged[key] = previous[key]
+  }
+  return redactObjectSecrets(merged)
 }
 
 export async function markJobFailed(jobId: string, errorMessage: string): Promise<void> {
@@ -485,7 +498,7 @@ export async function markJobCancelled(job: AigcJobRecord, response: Record<stri
     .from("aigc_jobs")
     .update({
       status: "cancelled",
-      provider_response: redactObjectSecrets(response),
+      provider_response: mergeProviderResponse(job.provider_response, response),
       updated_at: now,
       completed_at: job.completed_at ?? now,
       reconcile_token: null,

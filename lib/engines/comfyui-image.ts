@@ -49,7 +49,9 @@ export async function submitComfyUiImage(request: SubmitRequest): Promise<Provid
     response: {
       prompt_id: providerJobId,
       uses_comfy_account_api_key: Boolean(config.accountApiKey),
-      workflow_id: rendered.id,
+      catalog_workflow_id: request.workflowId,
+      execution_variant: rendered.id,
+      template_version: rendered.templateVersion,
       settings: { width: rendered.width, height: rendered.height, seed: rendered.seed },
     },
   }

@@ -84,9 +84,9 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 
 ## 当前状态(诚实)
 
-- **已完成 + 经审 + typecheck/build 通过**:aigc-r2 全链路(token/预签名/内部 endpoint/adapter/核验/reconcile 兜底/孤儿清理)、input 参数透传、UI 控件(尺寸·宽高比·参考图)、图生图(`z_image_turbo_i2i`)、视频/3D 通用化 + 文生视频(seedance)/文生 3D(tripo)接入、**多参考图**(seedance r2v / tripo i2model,可变 1~N 张 + video/3D 参考图上传 UI)。
-- **待部署同学真跑一次**:**任一引擎端到端从未真跑过**。需配好 env + R2 + Modal Secret,跑一次文生图/视频/3D E2E。工作流模板(`z_image_turbo_i2i`、seedance t2v/r2v、tripo t2model/i2model)也需在真 ComfyUI 各验证一次(此环境跑不了 ComfyUI/Modal)。⚠️**多参考图欠槽裁剪**假设 `ByteDance2ReferenceNode` / `BatchImagesNode` 的图槽是 optional(少于满槽时删空槽节点+断开引用);若节点槽实为必填,不足满槽会报错——满槽(seedance 4 / tripo 3)一定安全,可变路径需真机确认。
-- **待做**:OpenRouter Video adapter、视频/3D 的分辨率·时长·质量 UI 控件、hunyuan 3D 备选槽。
+- **已完成 + 经审 + typecheck/build 通过**:aigc-r2 全链路(token/预签名/内部 endpoint/adapter/核验/reconcile 兜底/孤儿清理)、input 参数透传、UI 控件(尺寸·宽高比·参考图)、图生图(`z_image_turbo_i2i`)、视频/3D 通用化 + 文生视频(seedance)/文生 3D(tripo)接入。参考图能力已改为按 **workflow + 当前 provider** 声明:UI 与服务端共用同一能力矩阵;fal video 不展示/不接受参考图;fal 3D 保留最多 4 视图;Modal Bridge 在真机确认 API 节点 optionality 前只接受完整槽位(seedance r2v=4、tripo i2model=3)。执行记录区分 catalog workflow / execution variant / template version。
+- **待部署同学真跑一次**:**任一引擎端到端从未真跑过**。需配好 env + R2 + Modal Secret,跑一次文生图/视频/3D E2E。工作流模板(`z_image_turbo_i2i`、seedance t2v/r2v、tripo t2model/i2model)也需在真 ComfyUI 各验证一次(此环境跑不了 ComfyUI/Modal)。当前明确拒绝 Seedance 1~3 张和 Tripo 1~2 张欠槽输入;逐数量真机验证后才能放宽能力矩阵。
+- **待做**:参考图先直传 job-scoped R2 staging(当前 inline data-uri 有 3MiB 合计保护)、OpenRouter Video adapter、视频/3D 的分辨率·时长·质量 UI 控件、hunyuan 3D 备选槽。
 
 ## 验证要求
 

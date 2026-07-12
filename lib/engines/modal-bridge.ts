@@ -81,7 +81,9 @@ export async function submitModalBridge(
     // 只存干净元数据;Bridge 的 /run 响应是 {id,status,gpu},不含 token。绝不存请求 body。
     response: {
       id: providerJobId,
-      workflow_id: rendered.id,
+      catalog_workflow_id: request.workflowId,
+      execution_variant: rendered.id,
+      template_version: rendered.templateVersion,
       gpu: firstString(response.gpu) ?? null,
       settings: { width: rendered.width ?? null, height: rendered.height ?? null, seed: rendered.seed ?? null },
     },

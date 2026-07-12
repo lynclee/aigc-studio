@@ -12,19 +12,20 @@ export async function handleGeneratePost(req: Request, kind: AigcKind): Promise<
   if (!session) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 })
 
   try {
-    ensureProviderConfigured(kind)
+    const provider = providerNameForKind(kind)
+    ensureProviderConfigured(kind, provider)
     const body = await parseJsonObject(req)
-    const request: SubmitRequest = sanitizeSubmitRequest(body, kind, session.userId)
+    const request: SubmitRequest = sanitizeSubmitRequest(body, kind, session.userId, provider)
     const job = await createQueuedJob({
       userId: session.userId,
       kind,
-      provider: providerNameForKind(kind),
+      provider,
       request,
     })
 
     let updatedJob: AigcJobRecord
     try {
-      const submission = await submitProvider(kind, request, { jobId: job.id })
+      const submission = await submitProvider(kind, request, { jobId: job.id }, provider)
       updatedJob = await attachProviderSubmission(job.id, submission)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

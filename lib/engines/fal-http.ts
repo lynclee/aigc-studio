@@ -125,6 +125,9 @@ export async function cancelFalStyle(_job: AigcJobRecord): Promise<Record<string
 }
 
 function buildVideoSubmission(request: SubmitRequest): { endpoint: string; body: Record<string, unknown> } {
+  if (inputImagesFrom(request.input).length > 0) {
+    throw new ProviderInputError("reference_images_not_supported")
+  }
   return {
     endpoint: configuredFalEndpoint("FAL_VIDEO_ENDPOINT", DEFAULT_VIDEO_ENDPOINT),
     body: {
@@ -141,6 +144,7 @@ function buildModel3dSubmission(request: SubmitRequest): { endpoint: string; bod
     throw new ProviderInputError(`unsupported model3d workflow '${workflowId}'. Supported workflows: hunyuan3d, tripo3d`)
   }
   const images = inputImagesFrom(request.input)
+  if (images.length > 4) throw new ProviderInputError("too_many_reference_images")
   if (images.length === 0) {
     const endpoint = workflow.textEndpoint
     return { endpoint, body: buildTextTo3dFalInput(endpoint, request) }
@@ -196,7 +200,7 @@ function inputImagesFrom(input: Record<string, unknown>): string[] {
         .filter((value): value is string => Boolean(value))
     : []
   const single = firstString(input.image, input.image_url, input.imageUrl, input.input_image_url, input.inputImageUrl)
-  return [...(single ? [single] : []), ...fromArray].slice(0, 4)
+  return [...(single ? [single] : []), ...fromArray]
 }
 
 function buildTextTo3dFalInput(endpoint: string, request: SubmitRequest): Record<string, unknown> {

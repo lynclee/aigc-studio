@@ -1,63 +1,93 @@
 import { describe, expect, it } from "vitest"
 import { JobInputError, sanitizeSubmitRequest } from "@/lib/jobs/input"
+import type { AigcKind } from "@/lib/aigc/types"
+import type { WorkflowProvider } from "@/lib/workflows/capabilities"
 
 const PNG = "data:image/png;base64,iVBORw0KGgo="
 const base = { prompt: "p", workflow: "standard" }
 
+function sanitize(
+  body: Record<string, unknown>,
+  kind: AigcKind = "image",
+  provider: WorkflowProvider = "modal-bridge",
+) {
+  return sanitizeSubmitRequest(body, kind, "u", provider)
+}
+
+function expectCode(run: () => unknown, code: string) {
+  try {
+    run()
+    throw new Error("expected JobInputError")
+  } catch (error) {
+    expect(error).toBeInstanceOf(JobInputError)
+    expect((error as JobInputError).code).toBe(code)
+  }
+}
+
 describe("sanitizeSubmitRequest", () => {
   it("requires a non-empty, bounded prompt", () => {
-    expect(() => sanitizeSubmitRequest({ workflow: "standard" }, "image", "u")).toThrow(JobInputError)
-    expect(() => sanitizeSubmitRequest({ prompt: "x".repeat(4001), workflow: "standard" }, "image", "u")).toThrow(JobInputError)
+    expect(() => sanitize({ workflow: "standard" })).toThrow(JobInputError)
+    expect(() => sanitize({ prompt: "x".repeat(4001), workflow: "standard" })).toThrow(JobInputError)
   })
 
   it("enforces the workflow allowlist", () => {
-    expect(() => sanitizeSubmitRequest({ prompt: "p", workflow: "evil" }, "image", "u")).toThrow(JobInputError)
+    expect(() => sanitize({ prompt: "p", workflow: "evil" })).toThrow(JobInputError)
   })
 
   it("passes valid dimensions, rejects out-of-range", () => {
-    const r = sanitizeSubmitRequest({ ...base, width: 1024, height: 768 }, "image", "u")
+    const r = sanitize({ ...base, width: 1024, height: 768 })
     expect(r.input.width).toBe(1024)
     expect(r.input.height).toBe(768)
-    expect(() => sanitizeSubmitRequest({ ...base, width: 99999 }, "image", "u")).toThrow(JobInputError)
-    expect(() => sanitizeSubmitRequest({ ...base, width: 10 }, "image", "u")).toThrow(JobInputError)
-    expect(() => sanitizeSubmitRequest({ ...base, width: "1e9" }, "image", "u")).toThrow(JobInputError)
+    expect(() => sanitize({ ...base, width: 99999 })).toThrow(JobInputError)
+    expect(() => sanitize({ ...base, width: 10 })).toThrow(JobInputError)
+    expect(() => sanitize({ ...base, width: "1e9" })).toThrow(JobInputError)
   })
 
   it("rejects extreme / zero aspect ratios, accepts sane ones", () => {
-    expect(() => sanitizeSubmitRequest({ ...base, aspectRatio: "99:1" }, "image", "u")).toThrow(JobInputError)
-    expect(() => sanitizeSubmitRequest({ ...base, aspectRatio: "0:0" }, "image", "u")).toThrow(JobInputError)
-    expect(sanitizeSubmitRequest({ ...base, aspectRatio: "16:9" }, "image", "u").input.aspectRatio).toBe("16:9")
-    expect(sanitizeSubmitRequest({ ...base, aspectRatio: "square" }, "image", "u").input.aspectRatio).toBe("square")
+    expect(() => sanitize({ ...base, aspectRatio: "99:1" })).toThrow(JobInputError)
+    expect(() => sanitize({ ...base, aspectRatio: "0:0" })).toThrow(JobInputError)
+    expect(sanitize({ ...base, aspectRatio: "16:9" }).input.aspectRatio).toBe("16:9")
+    expect(sanitize({ ...base, aspectRatio: "square" }).input.aspectRatio).toBe("square")
   })
 
   it("validates seed range", () => {
-    expect(() => sanitizeSubmitRequest({ ...base, seed: -1 }, "image", "u")).toThrow(JobInputError)
-    expect(sanitizeSubmitRequest({ ...base, seed: 42 }, "image", "u").input.seed).toBe(42)
+    expect(() => sanitize({ ...base, seed: -1 })).toThrow(JobInputError)
+    expect(sanitize({ ...base, seed: 42 }).input.seed).toBe(42)
   })
 
   it("accepts base64 reference images, rejects URLs and control chars", () => {
-    const r = sanitizeSubmitRequest({ ...base, images: [PNG] }, "image", "u")
+    const r = sanitize({ ...base, images: [PNG] })
     expect(Array.isArray(r.input.images)).toBe(true)
-    expect(() => sanitizeSubmitRequest({ ...base, images: ["https://evil.example/x.png"] }, "image", "u")).toThrow(JobInputError)
+    expect(() => sanitize({ ...base, images: ["https://evil.example/x.png"] })).toThrow(JobInputError)
     // 错误 MIME(非 image)拒绝;含内部非法字符的 data-uri 拒绝。
-    expect(() => sanitizeSubmitRequest({ ...base, images: ["data:text/html;base64,aGVsbG8="] }, "image", "u")).toThrow(JobInputError)
-    expect(() => sanitizeSubmitRequest({ ...base, images: ["data:image/png;base64,not valid!!"] }, "image", "u")).toThrow(JobInputError)
+    expect(() => sanitize({ ...base, images: ["data:text/html;base64,aGVsbG8="] })).toThrow(JobInputError)
+    expect(() => sanitize({ ...base, images: ["data:image/png;base64,not valid!!"] })).toThrow(JobInputError)
+    expect(() => sanitize({ ...base, images: ["data:image/png;base64,A"] })).toThrow(JobInputError)
   })
 
-  it("caps reference image count per kind (image/video 4, model3d 3)", () => {
-    // image/video 上限 4:5 张拒绝、4 张通过
-    expect(() => sanitizeSubmitRequest({ ...base, images: [PNG, PNG, PNG, PNG, PNG] }, "image", "u")).toThrow(JobInputError)
-    expect(sanitizeSubmitRequest({ ...base, images: [PNG, PNG, PNG, PNG] }, "image", "u").input.images).toHaveLength(4)
-    // model3d 只有 3 个视图槽:4 张拒绝、3 张通过(不静默截断)
-    expect(() => sanitizeSubmitRequest({ ...base, images: [PNG, PNG, PNG, PNG] }, "model3d", "u")).toThrow(JobInputError)
-    expect(sanitizeSubmitRequest({ ...base, images: [PNG, PNG, PNG] }, "model3d", "u").input.images).toHaveLength(3)
+  it("enforces reference capability by workflow and provider", () => {
+    expectCode(() => sanitize({ ...base, images: [PNG] }, "video", "fal-video"), "reference_images_not_supported")
+    expectCode(() => sanitize({ ...base, images: [PNG, PNG] }, "video"), "invalid_reference_image_count")
+    expect(sanitize({ ...base, images: [PNG, PNG, PNG, PNG] }, "video").input.images).toHaveLength(4)
+    expectCode(() => sanitize({ ...base, images: [PNG, PNG, PNG, PNG] }, "model3d"), "too_many_reference_images")
+    expect(sanitize({ ...base, images: [PNG, PNG, PNG] }, "model3d").input.images).toHaveLength(3)
+    expect(sanitize({ ...base, images: [PNG, PNG, PNG, PNG] }, "model3d", "fal-model3d").input.images).toHaveLength(4)
+  })
+
+  it("rejects an aggregate inline-image payload that cannot fit the deployment request boundary", () => {
+    const encoded = "A".repeat(2_200_000) // ~1.57MiB decoded; individually valid, together over the 3MiB total.
+    const large = `data:image/png;base64,${encoded}`
+    expectCode(
+      () => sanitize({ ...base, images: [large, large, PNG, PNG] }, "video"),
+      "reference_images_total_too_large",
+    )
   })
 
   it("sanitizes and de-dups reference filenames (no `..` / leading dot)", () => {
-    const r = sanitizeSubmitRequest(
+    const r = sanitize(
       { ...base, images: [{ name: "../etc", image: PNG }, { name: "../etc", image: PNG }] },
-      "image",
-      "u",
+      "model3d",
+      "fal-model3d",
     )
     const imgs = r.input.images as { name: string }[]
     expect(imgs[0].name).not.toContain("..")
@@ -66,7 +96,7 @@ describe("sanitizeSubmitRequest", () => {
   })
 
   it("omits absent fields (downstream defaults apply)", () => {
-    const r = sanitizeSubmitRequest(base, "image", "u")
+    const r = sanitize(base)
     expect(r.input.width).toBeUndefined()
     expect(r.input.seed).toBeUndefined()
     expect(r.input.images).toBeUndefined()
