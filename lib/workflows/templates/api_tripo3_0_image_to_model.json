@@ -1,0 +1,55 @@
+{
+  "1": {
+    "inputs": {
+      "model_version": "v3.0-20250812",
+      "style": "None",
+      "texture": true,
+      "pbr": true,
+      "model_seed": "{{SEED}}",
+      "orientation": "default",
+      "texture_seed": "{{SEED}}",
+      "texture_quality": "detailed",
+      "texture_alignment": "geometry",
+      "face_limit": -1,
+      "quad": false,
+      "geometry_quality": "standard",
+      "image": ["19", 0]
+    },
+    "class_type": "TripoImageToModelNode",
+    "_meta": { "title": "Tripo: Image to Model" }
+  },
+  "2": {
+    "inputs": { "image": "{{REFERENCE_IMAGE_1}}" },
+    "class_type": "LoadImage",
+    "_meta": { "title": "Load Image (view 1)" }
+  },
+  "4": {
+    "inputs": { "image": "{{REFERENCE_IMAGE_2}}" },
+    "class_type": "LoadImage",
+    "_meta": { "title": "Load Image (view 2)" }
+  },
+  "3": {
+    "inputs": { "image": "{{REFERENCE_IMAGE_3}}" },
+    "class_type": "LoadImage",
+    "_meta": { "title": "Load Image (view 3)" }
+  },
+  "12": {
+    "inputs": { "model_file": ["1", 0], "image": "" },
+    "class_type": "Preview3D",
+    "_meta": { "title": "Preview 3D" }
+  },
+  "13": {
+    "inputs": { "filename_prefix": "3d/tripo_image2model", "image": "", "mesh": ["1", 2] },
+    "class_type": "SaveGLB",
+    "_meta": { "title": "Save GLB" }
+  },
+  "19": {
+    "inputs": {
+      "images.image0": ["2", 0],
+      "images.image1": ["4", 0],
+      "images.image2": ["3", 0]
+    },
+    "class_type": "BatchImagesNode",
+    "_meta": { "title": "Batch Images" }
+  }
+}

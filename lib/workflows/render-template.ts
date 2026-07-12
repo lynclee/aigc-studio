@@ -1,4 +1,4 @@
-type TemplateVars = Record<string, string | number | boolean | null>
+export type TemplateVars = Record<string, string | number | boolean | null>
 
 export function renderTemplate(template: unknown, vars: TemplateVars): unknown {
   if (template === null) return template

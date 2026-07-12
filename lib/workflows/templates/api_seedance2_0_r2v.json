@@ -1,0 +1,52 @@
+{
+  "344": {
+    "inputs": {
+      "filename_prefix": "video/Seedance2.0_r2v",
+      "format": "auto",
+      "codec": "auto",
+      "video": ["360", 0]
+    },
+    "class_type": "SaveVideo",
+    "_meta": { "title": "Save Video" }
+  },
+  "356": {
+    "inputs": { "image": "{{REFERENCE_IMAGE_1}}" },
+    "class_type": "LoadImage",
+    "_meta": { "title": "Load Image (reference 1)" }
+  },
+  "352": {
+    "inputs": { "image": "{{REFERENCE_IMAGE_2}}" },
+    "class_type": "LoadImage",
+    "_meta": { "title": "Load Image (reference 2)" }
+  },
+  "353": {
+    "inputs": { "image": "{{REFERENCE_IMAGE_3}}" },
+    "class_type": "LoadImage",
+    "_meta": { "title": "Load Image (reference 3)" }
+  },
+  "354": {
+    "inputs": { "image": "{{REFERENCE_IMAGE_4}}" },
+    "class_type": "LoadImage",
+    "_meta": { "title": "Load Image (reference 4)" }
+  },
+  "360": {
+    "inputs": {
+      "model": "Seedance 2.0",
+      "model.prompt": "{{PROMPT}}",
+      "model.resolution": "720p",
+      "model.ratio": "1:1",
+      "model.duration": 7,
+      "model.generate_audio": true,
+      "model.auto_downscale": true,
+      "model.auto_upscale": false,
+      "seed": "{{SEED}}",
+      "watermark": false,
+      "model.reference_images.image_1": ["356", 0],
+      "model.reference_images.image_2": ["352", 0],
+      "model.reference_images.image_3": ["353", 0],
+      "model.reference_images.image_4": ["354", 0]
+    },
+    "class_type": "ByteDance2ReferenceNode",
+    "_meta": { "title": "ByteDance Seedance 2.0 Reference to Video" }
+  }
+}

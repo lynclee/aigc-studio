@@ -44,8 +44,13 @@ describe("sanitizeSubmitRequest", () => {
     expect(() => sanitizeSubmitRequest({ ...base, images: ["data:image/png;base64,not valid!!"] }, "image", "u")).toThrow(JobInputError)
   })
 
-  it("caps reference image count", () => {
+  it("caps reference image count per kind (image/video 4, model3d 3)", () => {
+    // image/video 上限 4:5 张拒绝、4 张通过
     expect(() => sanitizeSubmitRequest({ ...base, images: [PNG, PNG, PNG, PNG, PNG] }, "image", "u")).toThrow(JobInputError)
+    expect(sanitizeSubmitRequest({ ...base, images: [PNG, PNG, PNG, PNG] }, "image", "u").input.images).toHaveLength(4)
+    // model3d 只有 3 个视图槽:4 张拒绝、3 张通过(不静默截断)
+    expect(() => sanitizeSubmitRequest({ ...base, images: [PNG, PNG, PNG, PNG] }, "model3d", "u")).toThrow(JobInputError)
+    expect(sanitizeSubmitRequest({ ...base, images: [PNG, PNG, PNG] }, "model3d", "u").input.images).toHaveLength(3)
   })
 
   it("sanitizes and de-dups reference filenames (no `..` / leading dot)", () => {

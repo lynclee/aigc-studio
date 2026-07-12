@@ -114,7 +114,6 @@ const IMAGE_SIZES = [
   { value: "hd", label: "高清", base: 1536 },
 ]
 
-const MAX_REFERENCE_IMAGES = 4
 const MAX_REFERENCE_BYTES = 3 * 1024 * 1024
 // 只有「标准出图」(z_image_turbo)有图生图变体;detail 是文生图,不接受参考图。
 const I2I_WORKFLOW = "standard"
@@ -158,11 +157,17 @@ function buildSubmitBody(config: MediaConfig, form: WorkbenchFormState, prompt: 
       body.width = dimensions.width
       body.height = dimensions.height
     }
-    if (form.workflow === I2I_WORKFLOW && form.referenceImages.length > 0) {
-      body.images = form.referenceImages
-    }
+  }
+  // 参考图:image 仅「标准出图」有图生图变体;video/3D 的工作流都有参考图变体,无条件透传。
+  if (workflowSupportsReference(config.type, form.workflow) && form.referenceImages.length > 0) {
+    body.images = form.referenceImages
   }
   return body
+}
+
+// image 只有 z_image_turbo(standard)接受参考图;video/3D(seedance r2v / tripo i2model)都接受。
+function workflowSupportsReference(type: MediaConfig["type"], workflow: string): boolean {
+  return type === "image" ? workflow === I2I_WORKFLOW : true
 }
 
 function readFileAsDataUri(file: File): Promise<string | null> {
@@ -869,10 +874,12 @@ function EntryCard({
   const Icon = config.icon
   const selectedWorkflow = config.workflows.find((item) => item.value === form.workflow)
   const canSubmit = form.prompt.trim().length > 0 && !isSubmitting
+  // 参考图槽上限按类型:3D(tripo i2model)只有 3 个视图槽,image/video 为 4。与后端 input.ts 一致。
+  const maxReference = config.type === "model3d" ? 3 : 4
 
   async function handleReferenceFiles(files: FileList | null) {
     if (!files || files.length === 0) return
-    const remaining = MAX_REFERENCE_IMAGES - form.referenceImages.length
+    const remaining = maxReference - form.referenceImages.length
     if (remaining <= 0) return
     const loaded: ReferenceImage[] = []
     for (const file of Array.from(files).slice(0, remaining)) {
@@ -882,6 +889,15 @@ function EntryCard({
     }
     if (loaded.length > 0) onChange({ referenceImages: [...form.referenceImages, ...loaded] })
   }
+
+  const supportsReference = workflowSupportsReference(config.type, form.workflow)
+  const referenceLabel = config.type === "model3d" ? "参考图 / 多视图（可选）" : "参考图（可选）"
+  const referenceHint =
+    config.type === "video"
+      ? `上传参考图按参考图生视频 · 最多 ${maxReference} 张 · 单张 ≤3MB`
+      : config.type === "model3d"
+        ? `上传多视图（前/侧/后）按图生 3D · 最多 ${maxReference} 张 · 单张 ≤3MB`
+        : `上传后按图生图出图 · 最多 ${maxReference} 张 · 单张 ≤3MB`
 
   return (
     <article className="flex min-h-[25rem] flex-col rounded-3xl border border-white/10 bg-neutral-900/70 p-5 shadow-xl shadow-black/10">
@@ -944,50 +960,49 @@ function EntryCard({
               ))}
             </div>
           </div>
-          {form.workflow === I2I_WORKFLOW && (
-          <div>
-            <span className="text-xs font-medium text-neutral-300">参考图（可选，图生图）</span>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {form.referenceImages.map((image, index) => (
-                <div
-                  key={index}
-                  className="relative h-14 w-14 overflow-hidden rounded-lg border border-white/10"
+        </div>
+      )}
+
+      {supportsReference && (
+        <div className="mt-5">
+          <span className="text-xs font-medium text-neutral-300">{referenceLabel}</span>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {form.referenceImages.map((image, index) => (
+              <div
+                key={index}
+                className="relative h-14 w-14 overflow-hidden rounded-lg border border-white/10"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={image.image} alt={image.name} className="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChange({ referenceImages: form.referenceImages.filter((_, i) => i !== index) })
+                  }
+                  className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/70 text-[10px] text-white"
+                  aria-label="移除参考图"
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={image.image} alt={image.name} className="h-full w-full object-cover" />
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onChange({ referenceImages: form.referenceImages.filter((_, i) => i !== index) })
-                    }
-                    className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/70 text-[10px] text-white"
-                    aria-label="移除参考图"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-              {form.referenceImages.length < MAX_REFERENCE_IMAGES && (
-                <label className="flex h-14 w-14 cursor-pointer items-center justify-center rounded-lg border border-dashed border-white/15 text-lg text-neutral-500 transition hover:border-indigo-400/60 hover:text-neutral-300">
-                  +
-                  <input
-                    type="file"
-                    accept={ACCEPTED_REFERENCE_TYPES}
-                    multiple
-                    className="hidden"
-                    onChange={(event) => {
-                      void handleReferenceFiles(event.target.files)
-                      event.target.value = ""
-                    }}
-                  />
-                </label>
-              )}
-            </div>
-            <p className="mt-1.5 text-xs text-neutral-500">
-              上传后按图生图出图 · 最多 {MAX_REFERENCE_IMAGES} 张 · 单张 ≤3MB
-            </p>
+                  ×
+                </button>
+              </div>
+            ))}
+            {form.referenceImages.length < maxReference && (
+              <label className="flex h-14 w-14 cursor-pointer items-center justify-center rounded-lg border border-dashed border-white/15 text-lg text-neutral-500 transition hover:border-indigo-400/60 hover:text-neutral-300">
+                +
+                <input
+                  type="file"
+                  accept={ACCEPTED_REFERENCE_TYPES}
+                  multiple
+                  className="hidden"
+                  onChange={(event) => {
+                    void handleReferenceFiles(event.target.files)
+                    event.target.value = ""
+                  }}
+                />
+              </label>
+            )}
           </div>
-          )}
+          <p className="mt-1.5 text-xs text-neutral-500">{referenceHint}</p>
         </div>
       )}
 

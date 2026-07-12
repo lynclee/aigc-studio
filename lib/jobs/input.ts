@@ -17,7 +17,9 @@ const SEED_MAX = 0x100000000 // 2^32,与 lib/workflows/image-registry.ts 一致
 const ASPECT_KEYWORDS = new Set(["square", "portrait", "landscape", "wide"])
 const ASPECT_RATIO_RE = /^\d{1,2}:\d{1,2}$/
 const MAX_ASPECT_RATIO = 4 // 拒绝极端长宽比(如 99:1),避免绕过尺寸上限放大显存;关键字都在此界内
-const MAX_REFERENCE_IMAGES = 4
+// 参考图槽数上限按 kind:model3d(tripo i2model)只有 3 个视图槽,image/video 为 4。
+// 超上限直接拒绝,不静默截断——否则第 4 张会被上传却无 LoadImage 承接、白占请求体。
+const MAX_REFERENCE_IMAGES: Record<AigcKind, number> = { image: 4, video: 4, model3d: 3 }
 const MAX_REFERENCE_IMAGE_BYTES = 4 * 1024 * 1024 // 解码后单图上限;实际还受 Vercel 请求体 4.5MB 限制
 // 只接受 base64 data-uri:杜绝 SSRF(输入 URL 被 provider 拉取的风险),且匹配 Bridge 的 base64 预期。
 const REFERENCE_DATA_URI_RE = /^data:image\/(?:png|jpe?g|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/
@@ -49,7 +51,7 @@ export function sanitizeSubmitRequest(
   if (aspectRatio !== undefined) input.aspectRatio = aspectRatio
   const seed = optionalSeed(body.seed)
   if (seed !== undefined) input.seed = seed
-  const images = optionalReferenceImages(body)
+  const images = optionalReferenceImages(body, kind)
   if (images !== undefined) input.images = images
 
   return {
@@ -91,12 +93,13 @@ function optionalSeed(value: unknown): number | undefined {
 
 function optionalReferenceImages(
   body: Record<string, unknown>,
+  kind: AigcKind,
 ): { name: string; image: string }[] | undefined {
   const raw = body.images ?? body.image
   if (raw === undefined || raw === null) return undefined
   const list = Array.isArray(raw) ? raw : [raw]
   if (list.length === 0) return undefined
-  if (list.length > MAX_REFERENCE_IMAGES) throw new JobInputError("too_many_reference_images")
+  if (list.length > MAX_REFERENCE_IMAGES[kind]) throw new JobInputError("too_many_reference_images")
   const seen = new Set<string>()
   return list.map((item, index) => sanitizeReferenceImage(item, index, seen))
 }
