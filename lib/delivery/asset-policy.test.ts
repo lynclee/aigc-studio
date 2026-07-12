@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
   extForAsset,
-  isAllowedAssetType,
   isAllowedContentType,
   normalizeEtag,
   parsePosition,
@@ -17,14 +16,6 @@ describe("asset-policy", () => {
     expect(isAllowedContentType("model", "model/gltf-binary")).toBe(true)
     expect(isAllowedContentType("model", "model/obj")).toBe(true)
     expect(isAllowedContentType("model", "image/png")).toBe(false)
-  })
-
-  it("asset_type is bound to kind (H5)", () => {
-    expect(isAllowedAssetType("image", "image")).toBe(true)
-    expect(isAllowedAssetType("image", "video")).toBe(false)
-    expect(isAllowedAssetType("video", "video")).toBe(true)
-    expect(isAllowedAssetType("model3d", "model3d")).toBe(true)
-    expect(isAllowedAssetType("image", "whatever")).toBe(false)
   })
 
   it("keeps real ext for octet-stream via filename (M8)", () => {

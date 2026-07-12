@@ -12,7 +12,7 @@ import { getUpload } from "@/lib/delivery/uploads"
 import { DeliveryVerifyError, verifyDeliveredAssets } from "@/lib/delivery/verify"
 import type { AigcJobRecord } from "@/lib/aigc/types"
 
-const job = { id: "job1", user_id: "u1", kind: "image" } as AigcJobRecord
+const job = { id: "job1", user_id: "u1", kind: "image", workflow_id: "standard" } as AigcJobRecord
 
 function asset(over: Record<string, unknown> = {}) {
   return { asset_type: "image", position: 0, r2_key: "aigc/u1/job1/image-0.png", content_type: "image/png", size_bytes: 100, etag: '"e1"', ...over }
@@ -74,6 +74,38 @@ describe("verifyDeliveredAssets", () => {
     await expect(
       verifyDeliveredAssets(job, [asset({ asset_type: "preview", r2_key: "aigc/u1/job1/preview-0.png" })]),
     ).rejects.toThrow(/no_primary_asset/)
+  })
+
+  it("applies the image limit to a video preview instead of the video limit", async () => {
+    const videoJob = { ...job, kind: "video", workflow_id: "standard" } as AigcJobRecord
+    const previewSize = 25 * 1024 * 1024 + 1
+    vi.mocked(getUpload)
+      .mockResolvedValueOnce({ r2_key: "aigc/u1/job1/video-0.mp4", content_type: "video/mp4" } as never)
+      .mockResolvedValueOnce({ r2_key: "aigc/u1/job1/preview-0.png", content_type: "image/png" } as never)
+    vi.mocked(headObject)
+      .mockResolvedValueOnce({ size: 100, etag: '"video"', contentType: "video/mp4" })
+      .mockResolvedValueOnce({ size: previewSize, etag: '"preview"', contentType: "image/png" })
+
+    await expect(
+      verifyDeliveredAssets(videoJob, [
+        asset({ asset_type: "video", r2_key: "aigc/u1/job1/video-0.mp4", etag: '"video"' }),
+        asset({
+          asset_type: "preview",
+          r2_key: "aigc/u1/job1/preview-0.png",
+          size_bytes: previewSize,
+          etag: '"preview"',
+        }),
+      ]),
+    ).rejects.toThrow(/asset_size_invalid/)
+    expect(copyObject).not.toHaveBeenCalled()
+  })
+
+  it("uses the workflow contract to reject a kind-compatible but workflow-invalid asset", async () => {
+    const imageJob = { ...job, workflow_id: "detail" } as AigcJobRecord
+    await expect(
+      verifyDeliveredAssets(imageJob, [asset({ asset_type: "model" })]),
+    ).rejects.toThrow(/asset_type_not_allowed/)
+    expect(getUpload).not.toHaveBeenCalled()
   })
 
   it("two-phase: no copy at all if any asset fails verification (M8)", async () => {

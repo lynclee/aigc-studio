@@ -27,7 +27,12 @@ export function ensureComfyUiImageConfigured(): void {
 
 export async function submitComfyUiImage(request: SubmitRequest): Promise<ProviderSubmitResult> {
   const config = getConfig()
-  const rendered = renderImageWorkflow({ prompt: request.prompt, input: request.input })
+  const rendered = renderImageWorkflow({
+    prompt: request.prompt,
+    input: request.input,
+    workflowId: request.workflowId,
+    provider: COMFYUI_IMAGE_PROVIDER,
+  })
   const response = await fetchComfyJson(config, "prompt", {
     method: "POST",
     body: JSON.stringify({

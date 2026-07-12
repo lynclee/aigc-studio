@@ -17,9 +17,7 @@ import { verifyDeliveryToken } from "@/lib/delivery/token"
 import { getOrCreateUpload } from "@/lib/delivery/uploads"
 import { deliveryError, mapInternalError } from "@/lib/delivery/http"
 import {
-  categoryForKind,
   extForAsset,
-  isAllowedAssetType,
   isAllowedContentType,
   isValidAssetType,
   maxBytesForCategory,
@@ -29,6 +27,7 @@ import {
   stagingKeyForFinal,
 } from "@/lib/delivery/asset-policy"
 import { getR2Env, signPutUrl } from "@/lib/r2"
+import { assetRuleForWorkflow } from "@/lib/workflows/definitions"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -47,16 +46,18 @@ export async function POST(req: Request): Promise<NextResponse> {
     if (!job) return deliveryError(401, "invalid_delivery_token")
     if (terminalStatus(job.status)) return deliveryError(409, "job_not_active")
 
-    if (!isValidAssetType(body.asset_type) || !isAllowedAssetType(job.kind, body.asset_type)) {
+    if (!isValidAssetType(body.asset_type)) {
       return deliveryError(400, "asset_type_not_allowed")
     }
     const assetType = body.asset_type
+    const assetRule = assetRuleForWorkflow(job.kind, job.workflow_id, assetType)
+    if (!assetRule) return deliveryError(400, "asset_type_not_allowed")
     const position = parsePosition(body.position)
     if (position === null) return deliveryError(400, "invalid_position")
 
     const contentType = normalizeContentType(typeof body.content_type === "string" ? body.content_type : null)
     if (!contentType) return deliveryError(400, "invalid_content_type")
-    const category = categoryForKind(job.kind)
+    const category = assetRule.category
     if (!isAllowedContentType(category, contentType)) return deliveryError(400, "content_type_not_allowed")
 
     const sizeBytes = parseSize(body.size_bytes)

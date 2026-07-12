@@ -8,26 +8,15 @@ import type { RequestOptions } from "node:https";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getR2Client } from "@/lib/r2";
 import type { AigcKind, ProviderOutputAsset } from "@/lib/aigc/types";
-
-const DEFAULT_CONTENT_TYPES: Record<string, string> = {
-  image: "image/png",
-  video: "video/mp4",
-  model: "model/gltf-binary",
-  output: "application/octet-stream",
-};
-
-const EXT_BY_CONTENT_TYPE: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/webp": "webp",
-  "image/gif": "gif",
-  "video/mp4": "mp4",
-  "video/webm": "webm",
-  "video/quicktime": "mov",
-  "model/gltf-binary": "glb",
-  "model/gltf+json": "gltf",
-  "application/octet-stream": "bin",
-};
+import {
+  extForAsset,
+  isAllowedContentType,
+  maxBytesForCategory,
+  normalizeContentType,
+  type AssetCategory,
+} from "@/lib/delivery/asset-policy";
+import { assetRuleForWorkflow } from "@/lib/workflows/definitions";
+import { validateWorkflowOutputs } from "@/lib/workflows/output-contract";
 
 const TRUSTED_PROVIDER_HOST_SUFFIXES = [
   "fal.media",
@@ -38,14 +27,6 @@ const TRUSTED_PROVIDER_HOST_SUFFIXES = [
 ];
 
 const ASSET_FETCH_TIMEOUT_MS = 60_000;
-const MAX_ASSET_BYTES: Record<AssetCategory, number> = {
-  image: 25 * 1024 * 1024,
-  model: 512 * 1024 * 1024,
-  video: 1024 * 1024 * 1024,
-  output: 25 * 1024 * 1024,
-};
-
-type AssetCategory = "image" | "model" | "video" | "output";
 
 type DownloadedAsset = {
   body: Transform;
@@ -62,9 +43,11 @@ export async function storeProviderAssetsInR2(params: {
   userId: string;
   jobId: string;
   kind: AigcKind;
+  workflowId: string;
   assets: ProviderOutputAsset[];
   keyVersion?: string;
 }): Promise<StoredAsset[]> {
+  validateWorkflowOutputs(params.kind, params.workflowId, params.assets);
   const r2 = getR2Client();
   if (!r2) {
     throw new Error(
@@ -74,15 +57,22 @@ export async function storeProviderAssetsInR2(params: {
 
   const stored: StoredAsset[] = [];
   for (const asset of params.assets) {
+    const category = providerAssetCategoryForWorkflow(
+      params.kind,
+      params.workflowId,
+      asset.assetType,
+    );
     if (!asset.url || asset.r2Key) {
       stored.push(asset);
       continue;
     }
-
     const url = await validateProviderAssetUrl(asset.url);
-    const category = assetCategory(params.kind, asset.assetType);
     const downloaded = await downloadProviderAsset(url, category);
-    const ext = extensionFor(downloaded.contentType, url.pathname);
+    const ext = extForAsset(
+      category,
+      downloaded.contentType,
+      filenameFromPathname(url.pathname),
+    );
     const key = providerAssetKey({
       userId: params.userId,
       jobId: params.jobId,
@@ -213,7 +203,7 @@ function downloadProviderAsset(
       }
 
       try {
-        const maxBytes = MAX_ASSET_BYTES[category];
+        const maxBytes = maxBytesForCategory(category);
         const contentLength = parseContentLength(
           headerValue(res.headers["content-length"]),
           maxBytes,
@@ -224,7 +214,11 @@ function downloadProviderAsset(
         if (!contentType) {
           throw new Error("Provider asset is missing a Content-Type header");
         }
-        validateContentType(contentType, category);
+        if (!isAllowedContentType(category, contentType)) {
+          throw new Error(
+            `Provider asset MIME type is not allowed for ${category}: ${contentType}`,
+          );
+        }
 
         countedBody = createByteLimitTransform({
           contentLength,
@@ -390,47 +384,18 @@ function parseContentLength(value: string | null, maxBytes: number): number {
   return contentLength;
 }
 
-function normalizeContentType(value: string | null | undefined): string | null {
-  return value?.split(";")[0]?.trim().toLowerCase() || null;
-}
-
-function validateContentType(
-  contentType: string,
-  category: AssetCategory,
-): void {
-  const ok =
-    category === "image"
-      ? ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(
-          contentType,
-        )
-      : category === "video"
-        ? ["video/mp4", "video/webm", "video/quicktime"].includes(contentType)
-        : category === "model"
-          ? [
-              "model/gltf-binary",
-              "model/gltf+json",
-              "application/octet-stream",
-            ].includes(contentType)
-          : contentType === DEFAULT_CONTENT_TYPES.output;
-
-  if (!ok) {
+export function providerAssetCategoryForWorkflow(
+  kind: AigcKind,
+  workflowId: string,
+  assetType: string,
+): AssetCategory {
+  const rule = assetRuleForWorkflow(kind, workflowId, assetType);
+  if (!rule) {
     throw new Error(
-      `Provider asset MIME type is not allowed for ${category}: ${contentType}`,
+      `Provider asset type is not allowed for workflow ${kind}/${workflowId}: ${assetType}`,
     );
   }
-}
-
-function assetCategory(kind: AigcKind, assetType: string): AssetCategory {
-  const normalized = assetType.toLowerCase();
-  if (normalized.includes("image") || kind === "image") return "image";
-  if (normalized.includes("video") || kind === "video") return "video";
-  if (
-    normalized.includes("model") ||
-    normalized.includes("3d") ||
-    kind === "model3d"
-  )
-    return "model";
-  return "output";
+  return rule.category;
 }
 
 function isBlockedIpAddress(address: string): boolean {
@@ -481,11 +446,9 @@ function isBlockedIpv6(address: string): boolean {
   );
 }
 
-function extensionFor(contentType: string, pathname: string): string {
-  const byType = EXT_BY_CONTENT_TYPE[contentType];
-  if (byType) return byType;
-  const fromPath = pathname.match(/\.([a-zA-Z0-9]{1,8})$/)?.[1];
-  return fromPath?.toLowerCase() ?? "bin";
+function filenameFromPathname(pathname: string): string | undefined {
+  const filename = pathname.split("/").pop();
+  return filename || undefined;
 }
 
 function headerValue(

@@ -63,6 +63,8 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 | `lib/delivery/{token,verify,uploads,cleanup,asset-policy,http}.ts` | delivery_token / HeadObject 核验 / 台账 / 孤儿清理 / 策略 |
 | `lib/workflows/registry.ts` | 按 kind 渲染工作流(image=image-registry;video/3D=Bridge API 模板) |
 | `lib/workflows/image-registry.ts` + `templates/*.json` | 图片工作流(含文生图 + 图生图 `z_image_turbo_i2i`);视频/3D 模板(seedance/tripo) |
+| `lib/workflows/definitions.ts` | Phase 1 代码内工作流目录：公共元数据、provider-effective input schema、执行变体、参考图能力、模板版本、输出契约 |
+| `lib/workflows/validate-template.ts` / `output-contract.ts` | 启动期模板完整性校验 / 所有 provider 共用的产物集合完整性校验 |
 | `lib/assets/r2-store.ts` / `lib/r2.ts` | R2 落库(URL 下载 + 字节直存)/ 预签名 GET·PUT / HeadObject / delete |
 | `supabase/migrations/0001-0006` | 0002 主表;0004 上传台账;0005 原子落库 RPC;0006 租约 fencing + RPC 权限升级 |
 
@@ -84,9 +86,9 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 
 ## 当前状态(诚实)
 
-- **已完成 + 经审 + typecheck/build 通过**:aigc-r2 全链路(token/预签名/内部 endpoint/adapter/核验/reconcile 兜底/孤儿清理)、input 参数透传、UI 控件(尺寸·宽高比·参考图)、图生图(`z_image_turbo_i2i`)、视频/3D 通用化 + 文生视频(seedance)/文生 3D(tripo)接入。参考图能力已改为按 **workflow + 当前 provider** 声明:UI 与服务端共用同一能力矩阵;fal video 不展示/不接受参考图;fal 3D 保留最多 4 视图;Modal Bridge 在真机确认 API 节点 optionality 前只接受完整槽位(seedance r2v=4、tripo i2model=3)。执行记录区分 catalog workflow / execution variant / template version。
+- **已完成 + 独立 review + test/typecheck/build 通过**:aigc-r2 全链路、input 参数透传、图生图、视频/3D 与多参考图工作流。Batch1 新增 PNG/JPEG/WebP/GIF signature/MIME 校验、两阶段大小预检、7 模板启动期完整性校验、模板变量非递归替换。Batch2 新增 Phase 1 `WorkflowDefinition` Catalog：Portal 工作流列表/现有参数控件、API allowlist/schema、provider execution/reference、template version、aigc-r2 与 URL/direct provider 输出核验共同消费同一目录；Fal/OpenRouter effective schema 不再展示/接受会被忽略的参数；所有 provider 都拒绝 preview-only 完成；浏览器 public catalog/API/generation 不暴露 provider/variant/env。
 - **待部署同学真跑一次**:**任一引擎端到端从未真跑过**。需配好 env + R2 + Modal Secret,跑一次文生图/视频/3D E2E。工作流模板(`z_image_turbo_i2i`、seedance t2v/r2v、tripo t2model/i2model)也需在真 ComfyUI 各验证一次(此环境跑不了 ComfyUI/Modal)。当前明确拒绝 Seedance 1~3 张和 Tripo 1~2 张欠槽输入;逐数量真机验证后才能放宽能力矩阵。
-- **待做**:参考图先直传 job-scoped R2 staging(当前 inline data-uri 有 3MiB 合计保护)、OpenRouter Video adapter、视频/3D 的分辨率·时长·质量 UI 控件、hunyuan 3D 备选槽。
+- **待做**:参考图先直传 job-scoped R2 staging(当前 inline data-uri 有 3MiB 合计保护)、OpenRouter Video adapter、视频/3D 的分辨率·时长·质量 UI 控件。Catalog 下一阶段优先补 immutable workflow revision/job snapshot，再做按 workflow 路由 provider 与通用 `parameters[] + binding`；当前仍是代码注册式 Phase 1，不应宣称已达到 DB/UGC 的“只加数据不发版”。
 
 ## 验证要求
 

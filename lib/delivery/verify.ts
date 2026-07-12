@@ -19,8 +19,6 @@ import { isRecord } from "@/lib/aigc/http"
 import { copyObject, getR2Env, headObject } from "@/lib/r2"
 import { getUpload } from "@/lib/delivery/uploads"
 import {
-  categoryForKind,
-  isAllowedAssetType,
   isValidAssetType,
   maxBytesForCategory,
   normalizeContentType,
@@ -29,6 +27,11 @@ import {
   parseSize,
   stagingKeyForFinal,
 } from "@/lib/delivery/asset-policy"
+import { assetRuleForWorkflow, workflowDefinition } from "@/lib/workflows/definitions"
+import {
+  validateWorkflowOutputs,
+  WorkflowOutputContractError,
+} from "@/lib/workflows/output-contract"
 
 export class DeliveryVerifyError extends Error {
   constructor(
@@ -64,7 +67,6 @@ export async function verifyDeliveredAssets(
   if (!Array.isArray(manifest) || manifest.length === 0) throw new DeliveryVerifyError("empty_manifest")
   if (manifest.length > MAX_MANIFEST_ASSETS) throw new DeliveryVerifyError("manifest_too_large")
 
-  const category = categoryForKind(job.kind)
   const seen = new Set<string>()
 
   // 阶段 1:全部 asset 先做校验 + HEAD staging(纯读,无副作用)。任一失败即抛,尚未 Copy(M8)。
@@ -77,15 +79,18 @@ export async function verifyDeliveredAssets(
     stagingEtag: string
     stagingRawEtag: string
     size: number
+    primary: boolean
     sha256?: string
   }
   const plans: Plan[] = []
   for (const raw of manifest) {
     if (!isRecord(raw)) throw new DeliveryVerifyError("invalid_asset")
-    if (!isValidAssetType(raw.asset_type) || !isAllowedAssetType(job.kind, raw.asset_type)) {
+    if (!isValidAssetType(raw.asset_type)) {
       throw new DeliveryVerifyError("asset_type_not_allowed")
     }
     const assetType = raw.asset_type
+    const assetRule = assetRuleForWorkflow(job.kind, job.workflow_id, assetType)
+    if (!assetRule) throw new DeliveryVerifyError("asset_type_not_allowed")
     const position = parsePosition(raw.position)
     if (position === null) throw new DeliveryVerifyError("invalid_position")
 
@@ -109,7 +114,9 @@ export async function verifyDeliveredAssets(
     const stagingKey = stagingKeyForFinal(finalKey)
     const head = await headObject(stagingKey) // 瞬时错误抛出(非 DeliveryVerifyError)→ 可重试
     if (!head) throw new DeliveryVerifyError("asset_not_found", 422)
-    if (head.size <= 0 || head.size > maxBytesForCategory(category)) throw new DeliveryVerifyError("asset_size_invalid", 422)
+    if (head.size <= 0 || head.size > maxBytesForCategory(assetRule.category)) {
+      throw new DeliveryVerifyError("asset_size_invalid", 422)
+    }
     if (head.size !== reportedSize) throw new DeliveryVerifyError("asset_size_mismatch", 422)
     const stagingEtag = normalizeEtag(head.etag)
     if (!stagingEtag || stagingEtag !== reportedEtag) throw new DeliveryVerifyError("asset_etag_mismatch", 422)
@@ -123,12 +130,20 @@ export async function verifyDeliveredAssets(
       stagingEtag,
       stagingRawEtag: head.etag ?? "",
       size: head.size,
+      primary: assetRule.primary,
       ...(typeof raw.checksum_sha256 === "string" ? { sha256: raw.checksum_sha256 } : {}),
     })
   }
 
-  // M5:至少要有一个主资产(非纯 preview),避免只交一张 preview 就算成功。
-  if (!plans.some((p) => p.assetType !== "preview")) throw new DeliveryVerifyError("no_primary_asset", 422)
+  // M5:完整输出集合由 workflow output contract 声明,不依赖 asset_type 命名约定。
+  try {
+    validateWorkflowOutputs(job.kind, job.workflow_id, plans)
+  } catch (error) {
+    if (error instanceof WorkflowOutputContractError) {
+      throw new DeliveryVerifyError(error.code, error.status)
+    }
+    throw error
+  }
 
   // 阶段 2:全部核验通过后再统一 Copy staging → final(final 从不发 PUT → 不可覆写)。
   const results: VerifiedAsset[] = []

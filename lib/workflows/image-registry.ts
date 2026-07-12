@@ -3,6 +3,13 @@ import { renderTemplate } from "@/lib/workflows/render-template"
 import zImageTurboTemplate from "@/lib/workflows/templates/z_image_turbo.json"
 import zImageTurboI2iTemplate from "@/lib/workflows/templates/z_image_turbo_i2i.json"
 import flux2KleinTemplate from "@/lib/workflows/templates/flux2_klein.json"
+import { validateWorkflowTemplate } from "@/lib/workflows/validate-template"
+import {
+  listWorkflowDefinitions,
+  resolveExecutionVariant,
+  workflowExecutionFor,
+  type WorkflowProvider,
+} from "@/lib/workflows/definitions"
 
 export type ImageWorkflowId = "z_image_turbo" | "z_image_turbo_i2i" | "flux2_klein"
 
@@ -14,20 +21,17 @@ type GpuClass = "cpu" | "cheap" | "primary" | "top"
 
 type ImageWorkflowConfig = {
   id: ImageWorkflowId
-  templateVersion: string
-  aliases: string[]
   gpu?: ModalGpu
   needsGpu?: boolean
   gpuClass?: GpuClass
   template: unknown
-  // 有参考图时用的图生图变体(同一模型 + 核心节点 LoadImage/VAEEncode)。没有则该工作流不支持图生图。
-  i2iTemplate?: unknown
-  i2iId?: ImageWorkflowId
 }
 
 type RenderImageWorkflowParams = {
   prompt: string
   input: Record<string, unknown>
+  workflowId: string
+  provider: WorkflowProvider
 }
 
 export type RenderedImageWorkflow = {
@@ -49,39 +53,95 @@ const SEED_MAX = 0x100000000
 const WORKFLOWS: ImageWorkflowConfig[] = [
   {
     id: "z_image_turbo",
-    templateVersion: "1",
-    aliases: ["standard", "fast", "z_image_turbo"],
     needsGpu: true,
     gpuClass: "primary",
     template: zImageTurboTemplate,
-    i2iTemplate: zImageTurboI2iTemplate,
-    i2iId: "z_image_turbo_i2i",
+  },
+  {
+    id: "z_image_turbo_i2i",
+    needsGpu: true,
+    gpuClass: "primary",
+    template: zImageTurboI2iTemplate,
   },
   {
     id: "flux2_klein",
-    templateVersion: "1",
-    aliases: ["detail", "detailed", "quality", "flux2_klein"],
     needsGpu: true,
     gpuClass: "primary",
     template: flux2KleinTemplate,
   },
 ]
 
-const WORKFLOW_BY_ALIAS = new Map(WORKFLOWS.flatMap((workflow) => workflow.aliases.map((alias) => [alias, workflow])))
+validateWorkflowTemplate(zImageTurboTemplate, {
+  id: "z_image_turbo",
+  kind: "image",
+  format: "wrapped",
+  placeholders: ["PROMPT", "WIDTH", "HEIGHT", "SEED"],
+  primaryOutputs: [{ classType: "SaveImage", input: "images" }],
+})
+validateWorkflowTemplate(zImageTurboI2iTemplate, {
+  id: "z_image_turbo_i2i",
+  kind: "image",
+  format: "wrapped",
+  placeholders: ["PROMPT", "REFERENCE_IMAGE", "SEED", "DENOISE"],
+  referencePlaceholders: ["REFERENCE_IMAGE"],
+  primaryOutputs: [{ classType: "SaveImage", input: "images" }],
+})
+validateWorkflowTemplate(flux2KleinTemplate, {
+  id: "flux2_klein",
+  kind: "image",
+  format: "wrapped",
+  placeholders: ["PROMPT", "WIDTH", "HEIGHT", "SEED"],
+  primaryOutputs: [{ classType: "SaveImage", input: "images" }],
+})
+
+const WORKFLOW_BY_ID = new Map(WORKFLOWS.map((workflow) => [workflow.id, workflow]))
+
+for (const definition of listWorkflowDefinitions("image")) {
+  for (const provider of ["modal-image", "modal-bridge", "comfyui-image"] as const) {
+    const execution = definition.executions[provider]
+    if (!execution) continue
+    for (const variant of executionVariants(execution)) {
+      if (!WORKFLOW_BY_ID.has(variant as ImageWorkflowId)) {
+        throw new Error(`image execution variant '${variant}' has no registered template`)
+      }
+    }
+  }
+}
 
 export function renderImageWorkflow(params: RenderImageWorkflowParams): RenderedImageWorkflow {
-  const config = resolveImageWorkflow(params.input)
+  const execution = workflowExecutionFor("image", params.workflowId, params.provider)
+  if (!execution) {
+    throw new ImageWorkflowInputError(`image workflow '${params.workflowId}' is unavailable for '${params.provider}'`)
+  }
   const { width, height } = dimensionsFromInput(params.input)
   const seed = seedFromInput(params.input)
-  const referenceName = firstReferenceName(params.input)
-  // 有参考图且该工作流有 i2i 变体 → 走图生图(LoadImage→VAEEncode);否则文生图。
-  const template = config.i2iTemplate && referenceName ? config.i2iTemplate : config.template
-  const rendered = renderTemplate(template, {
+  const referenceNames = referenceNamesFrom(params.input)
+  const usesReference = referenceNames.length > 0
+  if (usesReference) {
+    const capability = execution.reference
+    if (!capability?.enabled) {
+      throw new ImageWorkflowInputError("reference_images_not_supported")
+    }
+    if (referenceNames.length < capability.minImages || referenceNames.length > capability.maxImages) {
+      throw new ImageWorkflowInputError("invalid_reference_image_count")
+    }
+  }
+  const resolved = resolveExecutionVariant(
+    "image",
+    params.workflowId,
+    params.provider,
+    referenceNames.length,
+  )
+  if (!resolved) throw new ImageWorkflowInputError("invalid_reference_image_count")
+  const variant = resolved.variant
+  const config = WORKFLOW_BY_ID.get(variant as ImageWorkflowId)
+  if (!config) throw new Error(`image execution variant '${variant}' has no registered template`)
+  const rendered = renderTemplate(config.template, {
     PROMPT: params.prompt,
     WIDTH: width,
     HEIGHT: height,
     SEED: seed,
-    REFERENCE_IMAGE: referenceName ?? "",
+    REFERENCE_IMAGE: referenceNames[0] ?? "",
     DENOISE: DEFAULT_DENOISE,
   })
   const workflow = isRecord(rendered) && isRecord(rendered.input) && isRecord(rendered.input.workflow)
@@ -89,8 +149,8 @@ export function renderImageWorkflow(params: RenderImageWorkflowParams): Rendered
     : null
   if (!workflow) throw new Error(`image workflow '${config.id}' template missing input.workflow after render`)
   return {
-    id: config.i2iTemplate && config.i2iId && referenceName ? config.i2iId : config.id,
-    templateVersion: config.templateVersion,
+    id: config.id,
+    templateVersion: execution.templateVersion,
     workflow,
     gpu: config.gpu,
     needsGpu: config.needsGpu,
@@ -101,23 +161,12 @@ export function renderImageWorkflow(params: RenderImageWorkflowParams): Rendered
   }
 }
 
-function resolveImageWorkflow(input: Record<string, unknown>): ImageWorkflowConfig {
-  const requested = firstString(input.workflowId, input.workflow_id, input.workflow, input.mode)?.toLowerCase()
-  if (!requested) return WORKFLOW_BY_ALIAS.get("standard") as ImageWorkflowConfig
-  const config = WORKFLOW_BY_ALIAS.get(requested)
-  if (!config) {
-    const supported = [...new Set(WORKFLOWS.flatMap((workflow) => workflow.aliases))].join(", ")
-    throw new ImageWorkflowInputError(`unsupported image workflow '${requested}'. Supported workflows: ${supported}`)
-  }
-  return config
-}
-
-function firstReferenceName(input: Record<string, unknown>): string | undefined {
+function referenceNamesFrom(input: Record<string, unknown>): string[] {
   const images = input.images
-  if (Array.isArray(images) && images.length > 0 && isRecord(images[0]) && typeof images[0].name === "string") {
-    return images[0].name
-  }
-  return undefined
+  if (!Array.isArray(images)) return []
+  return images
+    .map((image) => isRecord(image) && typeof image.name === "string" ? image.name : null)
+    .filter((name): name is string => Boolean(name))
 }
 
 function seedFromInput(input: Record<string, unknown>): number {
@@ -159,4 +208,16 @@ function round64(value: number): number {
 
 export class ImageWorkflowInputError extends Error {
   readonly status = 400
+}
+
+function executionVariants(execution: {
+  baseVariant: string
+  referenceVariant?: string
+  referenceVariants?: readonly { variant: string }[]
+}): string[] {
+  return [
+    execution.baseVariant,
+    ...(execution.referenceVariant ? [execution.referenceVariant] : []),
+    ...(execution.referenceVariants?.map((item) => item.variant) ?? []),
+  ]
 }

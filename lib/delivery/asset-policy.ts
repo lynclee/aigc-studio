@@ -3,8 +3,6 @@
  * 与 lib/assets/r2-store.ts 的下载侧约束保持一致，供内部 endpoint 校验 Bridge 上报值。
  */
 
-import type { AigcKind } from "@/lib/aigc/types"
-
 export type AssetCategory = "image" | "video" | "model" | "output"
 
 const MAX_BYTES: Record<AssetCategory, number> = {
@@ -51,30 +49,12 @@ const EXT_BY_CONTENT_TYPE: Record<string, string> = {
 
 const ASSET_TYPE_RE = /^[a-z0-9_-]{1,32}$/
 
-// asset_type 按 job.kind 白名单(H5):不再接受任意串,防 namespace 乱扩、语义错乱。
-const ALLOWED_ASSET_TYPES: Record<AigcKind, string[]> = {
-  image: ["image", "preview"],
-  video: ["video", "preview"],
-  model3d: ["model3d", "model", "preview"],
-}
-
 // octet-stream 的合法扩展名(按类别),用于从 filename 保真扩展名而不是一律 .bin(M8)。
 const OCTET_STREAM_EXTS: Record<AssetCategory, string[]> = {
   image: [],
   video: [],
   model: ["fbx", "ply", "splat", "spz", "ksplat"],
   output: ["bin"],
-}
-
-export function isAllowedAssetType(kind: AigcKind, assetType: string): boolean {
-  return (ALLOWED_ASSET_TYPES[kind] ?? []).includes(assetType)
-}
-
-export function categoryForKind(kind: AigcKind): AssetCategory {
-  if (kind === "image") return "image"
-  if (kind === "video") return "video"
-  if (kind === "model3d") return "model"
-  return "output"
 }
 
 export function maxBytesForCategory(category: AssetCategory): number {

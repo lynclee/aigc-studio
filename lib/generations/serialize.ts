@@ -25,8 +25,8 @@ export async function serializeGeneration(
     id: generation.id,
     job_id: generation.job_id,
     kind: generation.kind,
+    workflow_id: generation.workflow_id,
     prompt: generation.prompt,
-    provider: generation.provider,
     created_at: generation.created_at,
     assets: await Promise.all(assets.map(serializeAsset)),
   }

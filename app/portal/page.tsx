@@ -3,9 +3,9 @@ import { getSession } from "@/lib/session"
 import { PortalWorkbench } from "@/components/portal-workbench"
 import { providerNameForKind } from "@/lib/jobs/providers"
 import {
-  emptyReferenceCapabilityMap,
-  referenceCapabilityMapForProviders,
-} from "@/lib/workflows/capabilities"
+  emptyPublicWorkflowCatalog,
+  publicWorkflowCatalogForProviders,
+} from "@/lib/workflows/definitions"
 
 export const dynamic = "force-dynamic"
 
@@ -13,9 +13,9 @@ export default async function PortalPage() {
   const session = await getSession()
   if (!session) redirect("/")
 
-  let referenceCapabilities = emptyReferenceCapabilityMap()
+  let workflowCatalog = emptyPublicWorkflowCatalog()
   try {
-    referenceCapabilities = referenceCapabilityMapForProviders({
+    workflowCatalog = publicWorkflowCatalogForProviders({
       image: providerNameForKind("image"),
       video: providerNameForKind("video"),
       model3d: providerNameForKind("model3d"),
@@ -29,7 +29,7 @@ export default async function PortalPage() {
     <PortalWorkbench
       userName={session.name}
       userAvatar={session.avatar}
-      referenceCapabilities={referenceCapabilities}
+      workflowCatalog={workflowCatalog}
     />
   )
 }

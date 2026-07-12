@@ -43,7 +43,12 @@ export function ensureModalImageConfigured(): void {
 
 export async function submitModalImage(request: SubmitRequest): Promise<ProviderSubmitResult> {
   const config = getConfig()
-  const rendered = renderImageWorkflow({ prompt: request.prompt, input: request.input })
+  const rendered = renderImageWorkflow({
+    prompt: request.prompt,
+    input: request.input,
+    workflowId: request.workflowId,
+    provider: MODAL_IMAGE_PROVIDER,
+  })
   const response = await fetchJson(modalUrl(config, "run"), {
     method: "POST",
     headers: headers(config),

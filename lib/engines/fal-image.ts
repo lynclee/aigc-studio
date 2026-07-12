@@ -7,8 +7,10 @@ import {
   providerStatusFrom,
   providerStatusUrlFrom,
   ProviderConfigurationError,
+  ProviderInputError,
   UnsupportedCancelError,
 } from "@/lib/engines/provider-utils"
+import { resolveExecutionVariant } from "@/lib/workflows/definitions"
 
 const FAL_QUEUE_BASE = "https://queue.fal.run"
 
@@ -30,19 +32,22 @@ function falHeaders(apiKey: string): HeadersInit {
 
 export function ensureFalImageConfigured(): void {
   getConfig()
-  const configured = [
-    process.env.FAL_IMAGE_ENDPOINT,
-    process.env.FAL_IMAGE_STANDARD_ENDPOINT,
-    process.env.FAL_IMAGE_DETAIL_ENDPOINT,
-  ].some((value) => Boolean(value?.trim()))
-  if (!configured) {
-    throw new MissingProviderEnvError(FAL_IMAGE_PROVIDER, ["FAL_IMAGE_ENDPOINT"])
+  const hasDefault = Boolean(process.env.FAL_IMAGE_ENDPOINT?.trim() || process.env.FAL_IMAGE_STANDARD_ENDPOINT?.trim())
+  if (!hasDefault) {
+    throw new MissingProviderEnvError(FAL_IMAGE_PROVIDER, ["FAL_IMAGE_ENDPOINT or FAL_IMAGE_STANDARD_ENDPOINT"])
   }
 }
 
 export async function submitFalImage(request: SubmitRequest): Promise<ProviderSubmitResult> {
   const config = getConfig()
-  const endpoint = endpointForWorkflow(request.workflowId)
+  const referenceCount = Array.isArray(request.input.images) ? request.input.images.length : 0
+  const resolved = resolveExecutionVariant("image", request.workflowId, FAL_IMAGE_PROVIDER, referenceCount)
+  if (!resolved) {
+    throw new ProviderInputError(
+      referenceCount > 0 ? "reference_images_not_supported" : `unsupported image workflow '${request.workflowId}'`,
+    )
+  }
+  const endpoint = endpointForVariant(resolved.variant)
   const response = await fetchJson(`${FAL_QUEUE_BASE}/${endpoint}`, {
     method: "POST",
     headers: falHeaders(config.apiKey),
@@ -60,7 +65,14 @@ export async function submitFalImage(request: SubmitRequest): Promise<ProviderSu
     providerJobId,
     status: hasProviderStatus(response) ? providerStatusFrom(response) : "queued",
     statusUrl,
-    response: { ...response, endpoint, response_url: responseUrl },
+    response: {
+      ...response,
+      endpoint,
+      response_url: responseUrl,
+      catalog_workflow_id: request.workflowId,
+      execution_variant: resolved.variant,
+      template_version: resolved.execution.templateVersion,
+    },
   }
 }
 
@@ -104,11 +116,14 @@ export async function cancelFalImage(_job: AigcJobRecord): Promise<Record<string
   throw new UnsupportedCancelError("fal queue cancellation is not supported for this provider")
 }
 
-function endpointForWorkflow(workflowId: string): string {
+function endpointForVariant(variant: string): string {
   const generic = process.env.FAL_IMAGE_ENDPOINT?.trim()
   const standard = process.env.FAL_IMAGE_STANDARD_ENDPOINT?.trim()
   const detail = process.env.FAL_IMAGE_DETAIL_ENDPOINT?.trim()
-  const requested = workflowId === "detail" ? detail ?? generic ?? standard : standard ?? generic
+  if (variant !== "fal-image-standard" && variant !== "fal-image-detail") {
+    throw new ProviderConfigurationError(`Unsupported Fal image execution variant '${variant}'`)
+  }
+  const requested = variant === "fal-image-detail" ? detail ?? generic ?? standard : standard ?? generic
   if (!requested) throw new MissingProviderEnvError(FAL_IMAGE_PROVIDER, ["FAL_IMAGE_ENDPOINT"])
   if (!/^[A-Za-z0-9._/-]+$/.test(requested) || requested.includes("//")) {
     throw new ProviderConfigurationError("Fal image endpoint must be a fal.ai endpoint path")

@@ -7,8 +7,13 @@ import {
   providerStatusFrom,
   providerStatusUrlFrom,
   ProviderConfigurationError,
+  ProviderInputError,
   UnsupportedCancelError,
 } from "@/lib/engines/provider-utils"
+import {
+  resolveExecutionVariant,
+  type ResolvedExecutionVariant,
+} from "@/lib/workflows/definitions"
 
 const FAL_QUEUE_BASE = "https://queue.fal.run"
 
@@ -24,7 +29,6 @@ const MODEL3D_WORKFLOWS: Record<string, { endpoint: string; textEndpoint: string
   },
 }
 
-const DEFAULT_MODEL3D_WORKFLOW = "hunyuan3d"
 const DEFAULT_VIDEO_ENDPOINT = "fal-ai/wan-25-preview/text-to-video"
 
 type FalKind = Exclude<AigcKind, "image">
@@ -33,12 +37,6 @@ type FalConfig = {
   kind: FalKind
   provider: "fal-model3d" | "fal-video"
   apiKey: string
-}
-
-class ProviderInputError extends Error {
-  readonly status = 400
-  readonly code = "invalid_provider_input"
-  readonly exposeMessage = true
 }
 
 export { ProviderInputError, UnsupportedCancelError }
@@ -60,7 +58,7 @@ export function ensureFalStyleConfigured(kind: FalKind): void {
 
 export async function submitFalStyle(kind: FalKind, request: SubmitRequest): Promise<ProviderSubmitResult> {
   const config = getConfig(kind)
-  const { endpoint, body } = kind === "model3d" ? buildModel3dSubmission(request) : buildVideoSubmission(request)
+  const { endpoint, body, resolved } = kind === "model3d" ? buildModel3dSubmission(request) : buildVideoSubmission(request)
   const response = await fetchJson(`${FAL_QUEUE_BASE}/${endpoint}`, {
     method: "POST",
     headers: falHeaders(config.apiKey),
@@ -78,7 +76,14 @@ export async function submitFalStyle(kind: FalKind, request: SubmitRequest): Pro
     providerJobId,
     status,
     statusUrl,
-    response: { ...response, endpoint, response_url: responseUrl },
+    response: {
+      ...response,
+      endpoint,
+      response_url: responseUrl,
+      catalog_workflow_id: request.workflowId,
+      execution_variant: resolved.variant,
+      template_version: resolved.execution.templateVersion,
+    },
   }
 }
 
@@ -124,52 +129,68 @@ export async function cancelFalStyle(_job: AigcJobRecord): Promise<Record<string
   throw new UnsupportedCancelError("fal queue cancellation is not supported for this provider")
 }
 
-function buildVideoSubmission(request: SubmitRequest): { endpoint: string; body: Record<string, unknown> } {
-  if (inputImagesFrom(request.input).length > 0) {
+type FalSubmission = {
+  endpoint: string
+  body: Record<string, unknown>
+  resolved: ResolvedExecutionVariant
+}
+
+function buildVideoSubmission(request: SubmitRequest): FalSubmission {
+  const referenceCount = inputImagesFrom(request.input).length
+  if (referenceCount > 0) {
     throw new ProviderInputError("reference_images_not_supported")
   }
+  const resolved = resolveExecutionVariant("video", request.workflowId, "fal-video", referenceCount)
+  if (!resolved) throw new ProviderInputError(`unsupported video workflow '${request.workflowId}'`)
   return {
-    endpoint: configuredFalEndpoint("FAL_VIDEO_ENDPOINT", DEFAULT_VIDEO_ENDPOINT),
+    endpoint: configuredVideoEndpoint(resolved.variant),
     body: {
       prompt: request.prompt,
       ...dropInternalKeys(request.input, ["mediaType", "workflow", "workflowId"]),
     },
+    resolved,
   }
 }
 
-function buildModel3dSubmission(request: SubmitRequest): { endpoint: string; body: Record<string, unknown> } {
-  const workflowId = workflowIdFrom(request.input) ?? DEFAULT_MODEL3D_WORKFLOW
-  const workflow = configuredModel3dWorkflow(workflowId)
-  if (!workflow) {
-    throw new ProviderInputError(`unsupported model3d workflow '${workflowId}'. Supported workflows: hunyuan3d, tripo3d`)
+function configuredVideoEndpoint(variant: string): string {
+  if (variant !== "fal-wan25-t2v") {
+    throw new ProviderInputError(`unsupported video execution variant '${variant}'`)
   }
+  return configuredFalEndpoint("FAL_VIDEO_ENDPOINT", DEFAULT_VIDEO_ENDPOINT)
+}
+
+function buildModel3dSubmission(request: SubmitRequest): FalSubmission {
   const images = inputImagesFrom(request.input)
   if (images.length > 4) throw new ProviderInputError("too_many_reference_images")
-  if (images.length === 0) {
-    const endpoint = workflow.textEndpoint
-    return { endpoint, body: buildTextTo3dFalInput(endpoint, request) }
+  const resolved = resolveExecutionVariant("model3d", request.workflowId, "fal-model3d", images.length)
+  if (!resolved) throw new ProviderInputError(`unsupported model3d workflow or reference count '${request.workflowId}'`)
+  const endpoint = configuredModel3dEndpoint(resolved.variant)
+  return {
+    endpoint,
+    body: images.length === 0
+      ? buildTextTo3dFalInput(endpoint, request)
+      : buildModel3dFalInput(endpoint, images, request.input),
+    resolved,
   }
-  const endpoint = workflow.multiViewEndpoint && images.length >= 2 ? workflow.multiViewEndpoint : workflow.endpoint
-  return { endpoint, body: buildModel3dFalInput(endpoint, images, request.input) }
 }
 
-function configuredModel3dWorkflow(workflowId: string): { endpoint: string; textEndpoint: string; multiViewEndpoint?: string } | undefined {
-  const workflow = MODEL3D_WORKFLOWS[workflowId]
-  if (!workflow) return undefined
-
-  if (workflowId === "hunyuan3d") {
-    return {
-      endpoint: configuredFalEndpoint("FAL_MODEL3D_STANDARD_IMAGE_ENDPOINT", workflow.endpoint),
-      textEndpoint: configuredFalEndpoint("FAL_MODEL3D_STANDARD_ENDPOINT", workflow.textEndpoint),
-    }
-  }
-
-  return {
-    endpoint: configuredFalEndpoint("FAL_MODEL3D_GAME_ASSET_IMAGE_ENDPOINT", workflow.endpoint),
-    textEndpoint: configuredFalEndpoint("FAL_MODEL3D_GAME_ASSET_ENDPOINT", workflow.textEndpoint),
-    multiViewEndpoint: workflow.multiViewEndpoint
-      ? configuredFalEndpoint("FAL_MODEL3D_GAME_ASSET_MULTIVIEW_ENDPOINT", workflow.multiViewEndpoint)
-      : undefined,
+function configuredModel3dEndpoint(variant: string): string {
+  switch (variant) {
+    case "hunyuan3d":
+      return configuredFalEndpoint("FAL_MODEL3D_STANDARD_ENDPOINT", MODEL3D_WORKFLOWS.hunyuan3d.textEndpoint)
+    case "hunyuan3d-image":
+      return configuredFalEndpoint("FAL_MODEL3D_STANDARD_IMAGE_ENDPOINT", MODEL3D_WORKFLOWS.hunyuan3d.endpoint)
+    case "tripo3d":
+      return configuredFalEndpoint("FAL_MODEL3D_GAME_ASSET_ENDPOINT", MODEL3D_WORKFLOWS.tripo3d.textEndpoint)
+    case "tripo3d-image":
+      return configuredFalEndpoint("FAL_MODEL3D_GAME_ASSET_IMAGE_ENDPOINT", MODEL3D_WORKFLOWS.tripo3d.endpoint)
+    case "tripo3d-multiview":
+      return configuredFalEndpoint(
+        "FAL_MODEL3D_GAME_ASSET_MULTIVIEW_ENDPOINT",
+        MODEL3D_WORKFLOWS.tripo3d.multiViewEndpoint as string,
+      )
+    default:
+      throw new ProviderInputError(`unsupported model3d execution variant '${variant}'`)
   }
 }
 
@@ -179,13 +200,6 @@ function configuredFalEndpoint(envName: string, fallback: string): string {
     throw new ProviderConfigurationError(`${envName} must be a fal.ai endpoint path`)
   }
   return endpoint.replace(/^\/+|\/+$/g, "")
-}
-
-function workflowIdFrom(input: Record<string, unknown>): string | undefined {
-  const raw = firstString(input.workflowId, input.workflow_id, input.workflow)
-  if (!raw || raw === "standard") return undefined
-  if (raw === "game-asset") return "tripo3d"
-  return raw
 }
 
 function inputImagesFrom(input: Record<string, unknown>): string[] {
@@ -269,7 +283,7 @@ function extractFalResultAssets(kind: FalKind, result: Record<string, unknown>):
     const thumbnailUrl = fileUrl(result.thumbnail) ?? firstString(result.thumbnail_url, result.preview_url)
     return [
       ...(videoUrl ? [{ assetType: "video", position: 0, url: videoUrl, metadata: result }] : []),
-      ...(thumbnailUrl ? [{ assetType: "image", position: 1, url: thumbnailUrl, metadata: result }] : []),
+      ...(thumbnailUrl ? [{ assetType: "preview", position: 1, url: thumbnailUrl, metadata: result }] : []),
     ]
   }
 
@@ -284,7 +298,7 @@ function extractFalResultAssets(kind: FalKind, result: Record<string, unknown>):
   const thumbnailUrl = fileUrl(result.thumbnail) ?? fileUrl(result.rendered_image) ?? firstString(result.thumbnail_url, result.preview_url)
   return [
     ...(modelUrl ? [{ assetType: "model", position: 0, url: modelUrl, metadata: result }] : []),
-    ...(thumbnailUrl ? [{ assetType: "image", position: 1, url: thumbnailUrl, metadata: result }] : []),
+    ...(thumbnailUrl ? [{ assetType: "preview", position: 1, url: thumbnailUrl, metadata: result }] : []),
   ]
 }
 

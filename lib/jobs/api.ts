@@ -8,7 +8,6 @@ export function jsonError(error: unknown, fallbackStatus = 500): NextResponse {
       {
         ok: false,
         error: "missing_provider_env",
-        provider: error.provider,
         message: "Provider is not configured.",
       },
       { status: 503 },

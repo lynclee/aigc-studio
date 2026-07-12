@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto"
 import type { AigcJobRecord, ProviderStatusResult, ProviderSubmitResult, SubmitRequest } from "@/lib/aigc/types"
 import { fetchJson, firstString, isRecord, MissingProviderEnvError } from "@/lib/aigc/http"
 import { isSupportedImageContentType, MAX_INLINE_IMAGE_BYTES, storeImageBytesInR2 } from "@/lib/assets/r2-direct"
-import { ProviderConfigurationError, UnsupportedCancelError } from "@/lib/engines/provider-utils"
+import { ProviderConfigurationError, ProviderInputError, UnsupportedCancelError } from "@/lib/engines/provider-utils"
+import { resolveExecutionVariant } from "@/lib/workflows/definitions"
 
 const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images"
 const OPENROUTER_IMAGE_TIMEOUT_MS = 240_000
@@ -37,7 +38,14 @@ export function ensureOpenRouterImageConfigured(): void {
 
 export async function submitOpenRouterImage(request: SubmitRequest): Promise<ProviderSubmitResult> {
   const config = getConfig()
-  const model = modelForWorkflow(config, request.workflowId)
+  const referenceCount = Array.isArray(request.input.images) ? request.input.images.length : 0
+  const resolved = resolveExecutionVariant("image", request.workflowId, OPENROUTER_IMAGE_PROVIDER, referenceCount)
+  if (!resolved) {
+    throw new ProviderInputError(
+      referenceCount > 0 ? "reference_images_not_supported" : `unsupported image workflow '${request.workflowId}'`,
+    )
+  }
+  const model = modelForVariant(config, resolved.variant)
   const response = await fetchJson(
     OPENROUTER_IMAGES_URL,
     {
@@ -64,6 +72,9 @@ export async function submitOpenRouterImage(request: SubmitRequest): Promise<Pro
       content_type: stored.contentType,
       usage: stored.usage,
       completed_synchronously: true,
+      catalog_workflow_id: request.workflowId,
+      execution_variant: resolved.variant,
+      template_version: resolved.execution.templateVersion,
     },
   }
 }
@@ -127,9 +138,10 @@ function backgroundFromEnv(): "auto" | "transparent" | "opaque" | undefined {
   throw new ProviderConfigurationError("OPENROUTER_IMAGE_BACKGROUND must be auto, transparent, or opaque")
 }
 
-function modelForWorkflow(config: OpenRouterImageConfig, workflowId: string): string {
-  if (workflowId === "detail") return config.detailModel ?? config.defaultModel
-  return config.standardModel ?? config.defaultModel
+function modelForVariant(config: OpenRouterImageConfig, variant: string): string {
+  if (variant === "openrouter-detail") return config.detailModel ?? config.defaultModel
+  if (variant === "openrouter-standard") return config.standardModel ?? config.defaultModel
+  throw new ProviderConfigurationError(`Unsupported OpenRouter image execution variant '${variant}'`)
 }
 
 function openRouterHeaders(config: OpenRouterImageConfig): HeadersInit {

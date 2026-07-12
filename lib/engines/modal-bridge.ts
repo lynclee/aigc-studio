@@ -53,7 +53,12 @@ export async function submitModalBridge(
   ctx: { jobId: string },
 ): Promise<ProviderSubmitResult> {
   const config = getConfig()
-  const rendered = renderWorkflow(kind, { prompt: request.prompt, input: request.input })
+  const rendered = renderWorkflow(kind, {
+    prompt: request.prompt,
+    input: request.input,
+    workflowId: request.workflowId,
+    provider: MODAL_BRIDGE_PROVIDER,
+  })
   const token = signDeliveryToken({ jobId: ctx.jobId, userId: request.userId })
   const images = bridgeImagesFrom(request.input)
 

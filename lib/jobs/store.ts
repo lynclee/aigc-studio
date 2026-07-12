@@ -15,6 +15,7 @@ import type {
 import { isRecord } from "@/lib/aigc/http"
 import { storeProviderAssetsInR2 } from "@/lib/assets/r2-store"
 import { deleteObject } from "@/lib/r2"
+import { validateWorkflowOutputs } from "@/lib/workflows/output-contract"
 
 export class BackendStoreError extends Error {
   constructor(message: string, public readonly status = 500) {
@@ -370,11 +371,13 @@ export async function finalizeJobWithAssets(
   job: ClaimedAigcJobRecord,
   assets: ProviderOutputAsset[],
 ): Promise<{ generation: AigcGenerationRecord; assets: AigcAssetRecord[] } | null> {
+  validateWorkflowOutputs(job.kind, job.workflow_id, assets)
   const admin = requireAigcAdmin()
   const storedAssets = await storeProviderAssetsInR2({
     userId: job.user_id,
     jobId: job.id,
     kind: job.kind,
+    workflowId: job.workflow_id,
     assets,
     keyVersion: job.reconcile_token,
   })

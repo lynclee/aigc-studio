@@ -26,6 +26,12 @@ export class ProviderConfigurationError extends Error {
   }
 }
 
+export class ProviderInputError extends Error {
+  readonly status = 400
+  readonly code = "invalid_provider_input"
+  readonly exposeMessage = true
+}
+
 export class UnsupportedCancelError extends Error {
   readonly status = 409
   readonly code = "unsupported_cancel"

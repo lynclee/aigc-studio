@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest"
 import { JobInputError, sanitizeSubmitRequest } from "@/lib/jobs/input"
 import type { AigcKind } from "@/lib/aigc/types"
-import type { WorkflowProvider } from "@/lib/workflows/capabilities"
+import type { WorkflowProvider } from "@/lib/workflows/definitions"
 
 const PNG = "data:image/png;base64,iVBORw0KGgo="
 const base = { prompt: "p", workflow: "standard" }
+
+function pngDataUri(size: number): string {
+  const bytes = Buffer.alloc(Math.max(size, 8))
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes)
+  return `data:image/png;base64,${bytes.toString("base64")}`
+}
 
 function sanitize(
   body: Record<string, unknown>,
@@ -32,6 +38,7 @@ describe("sanitizeSubmitRequest", () => {
 
   it("enforces the workflow allowlist", () => {
     expect(() => sanitize({ prompt: "p", workflow: "evil" })).toThrow(JobInputError)
+    expectCode(() => sanitize({ prompt: "p", workflow: "standard" }, "image", "fal-video"), "unsupported_workflow")
   })
 
   it("passes valid dimensions, rejects out-of-range", () => {
@@ -55,6 +62,17 @@ describe("sanitizeSubmitRequest", () => {
     expect(sanitize({ ...base, seed: 42 }).input.seed).toBe(42)
   })
 
+  it("rejects parameters that are absent from the selected workflow schema", () => {
+    expectCode(() => sanitize({ ...base, width: 1024 }, "video"), "unsupported_workflow_parameter")
+    expectCode(() => sanitize({ ...base, aspectRatio: "16:9" }, "model3d"), "unsupported_workflow_parameter")
+    expect(sanitize({ ...base, seed: 42 }, "video").input.seed).toBe(42)
+    for (const provider of ["fal-image", "openrouter-image"] as const) {
+      expectCode(() => sanitize({ ...base, width: 1024 }, "image", provider), "unsupported_workflow_parameter")
+      expectCode(() => sanitize({ ...base, aspectRatio: "16:9" }, "image", provider), "unsupported_workflow_parameter")
+      expectCode(() => sanitize({ ...base, seed: 42 }, "image", provider), "unsupported_workflow_parameter")
+    }
+  })
+
   it("accepts base64 reference images, rejects URLs and control chars", () => {
     const r = sanitize({ ...base, images: [PNG] })
     expect(Array.isArray(r.input.images)).toBe(true)
@@ -63,6 +81,10 @@ describe("sanitizeSubmitRequest", () => {
     expect(() => sanitize({ ...base, images: ["data:text/html;base64,aGVsbG8="] })).toThrow(JobInputError)
     expect(() => sanitize({ ...base, images: ["data:image/png;base64,not valid!!"] })).toThrow(JobInputError)
     expect(() => sanitize({ ...base, images: ["data:image/png;base64,A"] })).toThrow(JobInputError)
+    expectCode(
+      () => sanitize({ ...base, images: [PNG.replace("image/png", "image/jpeg")] }),
+      "reference_image_type_mismatch",
+    )
   })
 
   it("enforces reference capability by workflow and provider", () => {
@@ -75,8 +97,7 @@ describe("sanitizeSubmitRequest", () => {
   })
 
   it("rejects an aggregate inline-image payload that cannot fit the deployment request boundary", () => {
-    const encoded = "A".repeat(2_200_000) // ~1.57MiB decoded; individually valid, together over the 3MiB total.
-    const large = `data:image/png;base64,${encoded}`
+    const large = pngDataUri(1_700_000) // individually valid, two copies exceed the 3MiB total.
     expectCode(
       () => sanitize({ ...base, images: [large, large, PNG, PNG] }, "video"),
       "reference_images_total_too_large",

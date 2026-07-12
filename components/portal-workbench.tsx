@@ -13,16 +13,14 @@ import {
   Sparkles,
   XCircle,
 } from "lucide-react"
-import type { ReferenceCapability, ReferenceCapabilityMap } from "@/lib/workflows/capabilities"
+import type {
+  PublicWorkflowCatalog,
+  PublicWorkflowDefinition,
+  ReferenceCapability,
+} from "@/lib/workflows/definitions"
 
 type MediaType = "image" | "model3d" | "video"
 type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled"
-
-type WorkflowOption = {
-  value: string
-  label: string
-  hint: string
-}
 
 type MediaConfig = {
   type: MediaType
@@ -31,8 +29,6 @@ type MediaConfig = {
   route: string
   icon: typeof ImageIcon
   accent: string
-  workflows: WorkflowOption[]
-  placeholder: string
 }
 
 type SubmittedJob = {
@@ -68,11 +64,6 @@ const MEDIA_CONFIGS: MediaConfig[] = [
     route: "/api/generate/image",
     icon: ImageIcon,
     accent: "from-fuchsia-500/25 to-indigo-500/10 text-fuchsia-200",
-    workflows: [
-      { value: "standard", label: "标准出图", hint: "适合快速探索画面方向" },
-      { value: "detail", label: "细节增强", hint: "适合更完整的美术描述" },
-    ],
-    placeholder: "描述你想要的画面、风格、主体、构图和用途……",
   },
   {
     type: "model3d",
@@ -81,11 +72,6 @@ const MEDIA_CONFIGS: MediaConfig[] = [
     route: "/api/generate/model3d",
     icon: Box,
     accent: "from-cyan-500/25 to-blue-500/10 text-cyan-200",
-    workflows: [
-      { value: "standard", label: "标准模型", hint: "只需填写提示词，适合常规 3D 资产" },
-      { value: "game-asset", label: "游戏资产", hint: "只需填写提示词，更偏向可下载资产" },
-    ],
-    placeholder: "描述模型外观、材质、比例、用途和需要强调的细节……",
   },
   {
     type: "video",
@@ -94,10 +80,6 @@ const MEDIA_CONFIGS: MediaConfig[] = [
     route: "/api/generate/video",
     icon: Film,
     accent: "from-amber-500/25 to-orange-500/10 text-amber-200",
-    workflows: [
-      { value: "standard", label: "标准视频", hint: "适合短镜头概念" },
-    ],
-    placeholder: "描述镜头内容、运动方式、氛围和画面风格……",
   },
 ]
 
@@ -139,11 +121,12 @@ type WorkbenchFormState = {
   prompt: string
   aspectRatio: string
   size: string
+  seed: string
   referenceImages: ReferenceImage[]
 }
 
 function createFormState(workflow: string): WorkbenchFormState {
-  return { workflow, prompt: "", aspectRatio: "1:1", size: "standard", referenceImages: [] }
+  return { workflow, prompt: "", aspectRatio: "1:1", size: "standard", seed: "", referenceImages: [] }
 }
 
 function roundTo64(value: number): number {
@@ -165,16 +148,19 @@ function buildSubmitBody(
   config: MediaConfig,
   form: WorkbenchFormState,
   prompt: string,
-  referenceCapability: ReferenceCapability,
+  workflow: PublicWorkflowDefinition,
 ): RawRecord {
   const body: RawRecord = { prompt, workflow: form.workflow, mediaType: config.type }
-  if (config.type === "image") {
+  if (workflow.inputSchema.supportsDimensions) {
     const dimensions = computeImageDimensions(form.aspectRatio, form.size)
     if (dimensions) {
       body.width = dimensions.width
       body.height = dimensions.height
     }
   }
+  if (workflow.inputSchema.supportsAspectRatio) body.aspectRatio = form.aspectRatio
+  if (workflow.inputSchema.supportsSeed && form.seed.trim()) body.seed = form.seed.trim()
+  const referenceCapability = workflow.reference
   if (
     referenceCapability.enabled &&
     form.referenceImages.length > 0 &&
@@ -187,6 +173,15 @@ function buildSubmitBody(
 
 function referenceCountAllowed(capability: ReferenceCapability, count: number): boolean {
   return count === 0 || (capability.enabled && count >= capability.minImages && count <= capability.maxImages)
+}
+
+function optionalSeedAllowed(
+  value: string,
+  bounds: Readonly<{ min: number; maxExclusive: number }>,
+): boolean {
+  if (!value.trim()) return true
+  const seed = Number(value)
+  return Number.isInteger(seed) && seed >= bounds.min && seed < bounds.maxExclusive
 }
 
 function readFileAsDataUri(file: File): Promise<string | null> {
@@ -236,9 +231,15 @@ const USER_ERROR_MESSAGES: Record<string, string> = {
   reference_image_too_large: "单张参考图过大，请压缩后重试",
   reference_images_total_too_large: "参考图合计超过 3MB，请压缩后重试",
   invalid_reference_image: "参考图格式无效，请使用 PNG、JPEG、WebP 或 GIF",
+  reference_image_type_mismatch: "参考图声明格式与实际文件不一致",
+  invalid_width: "图片宽度无效，请重新选择尺寸",
+  invalid_height: "图片高度无效，请重新选择尺寸",
+  invalid_aspect_ratio: "图片宽高比无效，请重新选择",
+  invalid_seed: "随机种子需为 0 到 4294967295 的整数",
   prompt_required: "请先填写提示词",
   prompt_too_long: "提示词过长，请精简后重试",
   unsupported_workflow: "所选工作流暂不可用，请重新选择",
+  unsupported_workflow_parameter: "当前工作流不支持所选参数，请重新设置",
   generation_failed: "本次生成失败，请调整描述后重试",
   storage_failed: "作品保存失败，请稍后重试",
   job_cancel_conflict: "任务状态刚刚变化，请刷新后重试",
@@ -594,17 +595,17 @@ async function readJsonSafely(response: Response): Promise<unknown> {
 export function PortalWorkbench({
   userName,
   userAvatar,
-  referenceCapabilities,
+  workflowCatalog,
 }: {
   userName: string
   userAvatar: string
-  referenceCapabilities: ReferenceCapabilityMap
+  workflowCatalog: PublicWorkflowCatalog
 }) {
   const [forms, setForms] = useState(() =>
     Object.fromEntries(
       MEDIA_CONFIGS.map((config) => [
         config.type,
-        createFormState(config.workflows[0]?.value ?? "standard"),
+        createFormState(workflowCatalog[config.type][0]?.id ?? ""),
       ]),
     ) as Record<MediaType, WorkbenchFormState>,
   )
@@ -704,16 +705,16 @@ export function PortalWorkbench({
 
   async function submitJob(config: MediaConfig) {
     const form = forms[config.type]
-    const referenceCapability = referenceCapabilities[config.type][form.workflow]
+    const workflow = workflowCatalog[config.type].find((item) => item.id === form.workflow)
     const prompt = form.prompt.trim()
-    if (!prompt || !referenceCapability || !referenceCountAllowed(referenceCapability, form.referenceImages.length)) return
+    if (!workflow || !prompt || !referenceCountAllowed(workflow.reference, form.referenceImages.length)) return
 
     setSubmitting(config.type)
     try {
       const response = await fetch(config.route, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildSubmitBody(config, form, prompt, referenceCapability)),
+        body: JSON.stringify(buildSubmitBody(config, form, prompt, workflow)),
       })
       const payload = await readJsonSafely(response)
       if (!response.ok) {
@@ -862,7 +863,7 @@ export function PortalWorkbench({
             <EntryCard
               key={config.type}
               config={config}
-              referenceCapabilities={referenceCapabilities[config.type]}
+              workflows={workflowCatalog[config.type]}
               form={forms[config.type]}
               isSubmitting={submitting === config.type}
               onChange={(next) =>
@@ -889,29 +890,36 @@ export function PortalWorkbench({
 
 function EntryCard({
   config,
-  referenceCapabilities,
+  workflows,
   form,
   isSubmitting,
   onChange,
   onSubmit,
 }: {
   config: MediaConfig
-  referenceCapabilities: Record<string, ReferenceCapability>
+  workflows: readonly PublicWorkflowDefinition[]
   form: WorkbenchFormState
   isSubmitting: boolean
   onChange: (next: Partial<WorkbenchFormState>) => void
   onSubmit: () => void
 }) {
   const Icon = config.icon
-  const selectedWorkflow = config.workflows.find((item) => item.value === form.workflow)
-  const referenceCapability = referenceCapabilities[form.workflow] ?? {
+  const selectedWorkflow = workflows.find((item) => item.id === form.workflow)
+  const referenceCapability = selectedWorkflow?.reference ?? {
     enabled: false,
     minImages: 0,
     maxImages: 0,
     roles: [],
   }
   const referenceCountIsValid = referenceCountAllowed(referenceCapability, form.referenceImages.length)
-  const canSubmit = form.prompt.trim().length > 0 && referenceCountIsValid && !isSubmitting
+  const seedRule = selectedWorkflow?.inputSchema.seed
+  const seedIsValid = !selectedWorkflow?.inputSchema.supportsSeed
+    || Boolean(seedRule && optionalSeedAllowed(form.seed, seedRule))
+  const canSubmit = Boolean(selectedWorkflow)
+    && form.prompt.trim().length > 0
+    && referenceCountIsValid
+    && seedIsValid
+    && !isSubmitting
   const maxReference = referenceCapability.maxImages
   const [referenceError, setReferenceError] = useState<string | null>(null)
 
@@ -969,9 +977,10 @@ function EntryCard({
       <select
         id={`${config.type}-workflow`}
         value={form.workflow}
+        disabled={workflows.length === 0}
         onChange={(event) => {
           const workflow = event.target.value
-          const nextCapability = referenceCapabilities[workflow]
+          const nextCapability = workflows.find((item) => item.id === workflow)?.reference
           const references = nextCapability?.enabled
             ? form.referenceImages.slice(0, nextCapability.maxImages)
             : []
@@ -980,46 +989,74 @@ function EntryCard({
         }}
         className="mt-2 rounded-xl border border-white/10 bg-neutral-950 px-3 py-2.5 text-sm text-white outline-none transition focus:border-indigo-400/70"
       >
-        {config.workflows.map((workflow) => (
-          <option key={workflow.value} value={workflow.value}>
-            {workflow.label}
+        {workflows.map((workflow) => (
+          <option key={workflow.id} value={workflow.id}>
+            {workflow.title}
           </option>
         ))}
       </select>
       {selectedWorkflow && <p className="mt-2 text-xs text-neutral-500">{selectedWorkflow.hint}</p>}
 
-      {config.type === "image" && (
+      {(selectedWorkflow?.inputSchema.supportsAspectRatio || selectedWorkflow?.inputSchema.supportsDimensions) && (
         <div className="mt-5 space-y-4">
-          <div>
-            <span className="text-xs font-medium text-neutral-300">宽高比</span>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {ASPECT_RATIOS.map((ratio) => (
-                <button
-                  key={ratio.value}
-                  type="button"
-                  onClick={() => onChange({ aspectRatio: ratio.value })}
-                  className={optionSegClass(form.aspectRatio === ratio.value)}
-                >
-                  {ratio.label}
-                </button>
-              ))}
+          {selectedWorkflow.inputSchema.supportsAspectRatio && (
+            <div>
+              <span className="text-xs font-medium text-neutral-300">宽高比</span>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {ASPECT_RATIOS.map((ratio) => (
+                  <button
+                    key={ratio.value}
+                    type="button"
+                    onClick={() => onChange({ aspectRatio: ratio.value })}
+                    className={optionSegClass(form.aspectRatio === ratio.value)}
+                  >
+                    {ratio.label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-          <div>
-            <span className="text-xs font-medium text-neutral-300">尺寸</span>
-            <div className="mt-2 flex gap-2">
-              {IMAGE_SIZES.map((size) => (
-                <button
-                  key={size.value}
-                  type="button"
-                  onClick={() => onChange({ size: size.value })}
-                  className={optionSegClass(form.size === size.value)}
-                >
-                  {size.label}
-                </button>
-              ))}
+          )}
+          {selectedWorkflow.inputSchema.supportsDimensions && (
+            <div>
+              <span className="text-xs font-medium text-neutral-300">尺寸</span>
+              <div className="mt-2 flex gap-2">
+                {IMAGE_SIZES.map((size) => (
+                  <button
+                    key={size.value}
+                    type="button"
+                    onClick={() => onChange({ size: size.value })}
+                    className={optionSegClass(form.size === size.value)}
+                  >
+                    {size.label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
+        </div>
+      )}
+
+      {selectedWorkflow?.inputSchema.supportsSeed && (
+        <div className="mt-5">
+          <label className="text-xs font-medium text-neutral-300" htmlFor={`${config.type}-seed`}>
+            随机种子（可选）
+          </label>
+          <input
+            id={`${config.type}-seed`}
+            type="number"
+            min={seedRule?.min}
+            max={seedRule ? seedRule.maxExclusive - 1 : undefined}
+            step={1}
+            value={form.seed}
+            onChange={(event) => onChange({ seed: event.target.value })}
+            placeholder="留空则每次随机"
+            className="mt-2 w-full rounded-xl border border-white/10 bg-neutral-950 px-3 py-2.5 text-sm text-white outline-none transition placeholder:text-neutral-600 focus:border-indigo-400/70"
+          />
+          {!seedIsValid && seedRule && (
+            <p className="mt-1 text-xs text-amber-300">
+              请输入 {seedRule.min} 到 {seedRule.maxExclusive - 1} 的整数
+            </p>
+          )}
         </div>
       )}
 
@@ -1082,7 +1119,10 @@ function EntryCard({
         id={`${config.type}-prompt`}
         value={form.prompt}
         onChange={(event) => onChange({ prompt: event.target.value })}
-        placeholder={config.placeholder}
+        placeholder={selectedWorkflow?.placeholder ?? "当前没有可用工作流"}
+        minLength={selectedWorkflow?.inputSchema.prompt.minLength}
+        maxLength={selectedWorkflow?.inputSchema.prompt.maxLength}
+        disabled={!selectedWorkflow}
         className="mt-2 min-h-36 flex-1 resize-none rounded-xl border border-white/10 bg-neutral-950 px-3 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-neutral-600 focus:border-indigo-400/70"
       />
 

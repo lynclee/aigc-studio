@@ -20,11 +20,11 @@ export function renderTemplate(template: unknown, vars: TemplateVars): unknown {
       return Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : template
     }
 
-    let out = template
-    for (const [key, value] of Object.entries(vars)) {
-      out = out.split(`{{${key}}}`).join(String(value))
-    }
-    return out
+    // One pass over the original template: replacement values may legitimately contain
+    // `{{TOKEN}}` text (for example a user prompt) and must never be expanded a second time.
+    return template.replace(/\{\{([A-Z0-9_]+)\}\}/g, (token, key: string) =>
+      Object.prototype.hasOwnProperty.call(vars, key) ? String(vars[key]) : token,
+    )
   }
 
   return template

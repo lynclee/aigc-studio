@@ -9,26 +9,25 @@
  *
  * video/model3d 模板是**原始 ComfyUI API 格式**(节点id→{inputs,class_type}),整个对象即 workflow;
  * 只做 {{PROMPT}}/{{SEED}} 占位替换。API 节点款需 Modal Secret 里有 COMFY_API_KEY_COMFY_ORG。
- * 上传参考图时切到 referenceTemplate:LoadImage 用 {{REFERENCE_IMAGE_K}} 占位,按上传数量裁剪多余槽
- * (删空槽节点 + 断开引用它的输入键),支持 1~N 张可变。
+ * 上传参考图时切到 referenceTemplate:LoadImage 用 {{REFERENCE_IMAGE_K}} 占位。API 节点欠槽
+ * optionality 尚未真机验证,当前只接受 capability 声明的完整槽位。
  */
 
 import type { AigcKind } from "@/lib/aigc/types"
-import { firstString, isRecord } from "@/lib/aigc/http"
+import { isRecord } from "@/lib/aigc/http"
 import { renderTemplate, type TemplateVars } from "@/lib/workflows/render-template"
 import { renderImageWorkflow } from "@/lib/workflows/image-registry"
 import seedanceTextToVideo from "@/lib/workflows/templates/api_seedance2_0_mini_t2v.json"
 import seedanceReferenceToVideo from "@/lib/workflows/templates/api_seedance2_0_r2v.json"
 import tripoTextToModel from "@/lib/workflows/templates/api_tripo3_0_text_to_model.json"
 import tripoImageToModel from "@/lib/workflows/templates/api_tripo3_0_image_to_model.json"
-
-export class WorkflowNotConfiguredError extends Error {
-  readonly status = 503
-  readonly code = "workflow_not_configured"
-  constructor(kind: AigcKind) {
-    super(`no ${kind} workflow is configured for Modal Bridge yet`)
-  }
-}
+import { validateWorkflowTemplate } from "@/lib/workflows/validate-template"
+import {
+  listWorkflowDefinitions,
+  resolveExecutionVariant,
+  workflowExecutionFor,
+  type WorkflowProvider,
+} from "@/lib/workflows/definitions"
 
 export class UnknownWorkflowError extends Error {
   readonly status = 400
@@ -52,85 +51,134 @@ export type RenderedWorkflow = {
 export type RenderWorkflowParams = {
   prompt: string
   input: Record<string, unknown>
+  workflowId: string
+  provider: WorkflowProvider
 }
 
-// video / model3d 的 Bridge 工作流(原始 API JSON)。加新工作流:导出 API JSON → 放 templates/ →
-// 在这里加一条。aliases 对应 job 的 workflow_id(video: "standard";model3d: "standard"/"game-asset")。
+// video / model3d 的 Bridge 模板注册表(原始 API JSON)。公开工作流、provider 映射、版本和
+// 参考图契约统一来自 definitions.ts；这里仅保存执行变体对应的静态模板与资源档位。
 type BridgeWorkflowConfig = {
   id: string
-  templateVersion: string
-  aliases: string[]
   needsGpu?: boolean
   gpuClass?: string
   template: unknown
-  // 上传了参考图时用的多图变体(LoadImage 槽 + 参考/批量节点)。没有则该工作流不支持参考图,
-  // 传了图也走文生模板。与图片侧 i2iTemplate 同思路。
-  referenceTemplate?: unknown
-  referenceId?: string
-  referenceCount?: number
 }
 
 const SEED_MAX = 0x100000000
-// LoadImage.image 用 {{REFERENCE_IMAGE_K}}(K 从 1 起)标记第 K 个参考图槽,渲染时按上传数量裁剪。
+// LoadImage.image 用 {{REFERENCE_IMAGE_K}}(K 从 1 起)标记第 K 个参考图槽；当前只渲染完整槽位。
 const REFERENCE_SLOT_RE = /^\{\{REFERENCE_IMAGE_(\d+)\}\}$/
 
-const VIDEO_WORKFLOWS: BridgeWorkflowConfig[] = [
+const BRIDGE_WORKFLOWS: BridgeWorkflowConfig[] = [
   {
     id: "seedance2_t2v",
-    templateVersion: "1",
-    aliases: ["standard"],
     needsGpu: false,
     template: seedanceTextToVideo,
-    referenceTemplate: seedanceReferenceToVideo,
-    referenceId: "seedance2_r2v",
-    referenceCount: 4,
+  },
+  {
+    id: "seedance2_r2v",
+    needsGpu: false,
+    template: seedanceReferenceToVideo,
+  },
+  {
+    id: "tripo3_t2model",
+    needsGpu: false,
+    template: tripoTextToModel,
+  },
+  {
+    id: "tripo3_i2model",
+    needsGpu: false,
+    template: tripoImageToModel,
   },
 ]
 
-const MODEL3D_WORKFLOWS: BridgeWorkflowConfig[] = [
-  {
-    id: "tripo3_t2model",
-    templateVersion: "1",
-    aliases: ["standard", "game-asset"],
-    needsGpu: false,
-    template: tripoTextToModel,
-    referenceTemplate: tripoImageToModel,
-    referenceId: "tripo3_i2model",
-    referenceCount: 3,
-  },
-]
+const BRIDGE_WORKFLOW_BY_ID = new Map(BRIDGE_WORKFLOWS.map((workflow) => [workflow.id, workflow]))
+
+validateWorkflowTemplate(seedanceTextToVideo, {
+  id: "seedance2_t2v",
+  kind: "video",
+  format: "graph",
+  placeholders: ["PROMPT", "SEED"],
+  primaryOutputs: [{ classType: "SaveVideo", input: "video" }],
+})
+validateWorkflowTemplate(seedanceReferenceToVideo, {
+  id: "seedance2_r2v",
+  kind: "video",
+  format: "graph",
+  placeholders: ["PROMPT", "SEED", "REFERENCE_IMAGE_1", "REFERENCE_IMAGE_2", "REFERENCE_IMAGE_3", "REFERENCE_IMAGE_4"],
+  referencePlaceholders: ["REFERENCE_IMAGE_1", "REFERENCE_IMAGE_2", "REFERENCE_IMAGE_3", "REFERENCE_IMAGE_4"],
+  primaryOutputs: [{ classType: "SaveVideo", input: "video" }],
+})
+validateWorkflowTemplate(tripoTextToModel, {
+  id: "tripo3_t2model",
+  kind: "model3d",
+  format: "graph",
+  placeholders: ["PROMPT", "SEED"],
+  primaryOutputs: [{ classType: "SaveGLB", input: "mesh" }],
+})
+validateWorkflowTemplate(tripoImageToModel, {
+  id: "tripo3_i2model",
+  kind: "model3d",
+  format: "graph",
+  placeholders: ["SEED", "REFERENCE_IMAGE_1", "REFERENCE_IMAGE_2", "REFERENCE_IMAGE_3"],
+  referencePlaceholders: ["REFERENCE_IMAGE_1", "REFERENCE_IMAGE_2", "REFERENCE_IMAGE_3"],
+  primaryOutputs: [{ classType: "SaveGLB", input: "mesh" }],
+})
+
+for (const kind of ["video", "model3d"] as const) {
+  for (const definition of listWorkflowDefinitions(kind)) {
+    const execution = definition.executions["modal-bridge"]
+    if (!execution) continue
+    const variants = [
+      execution.baseVariant,
+      ...(execution.referenceVariant ? [execution.referenceVariant] : []),
+      ...(execution.referenceVariants?.map((item) => item.variant) ?? []),
+    ]
+    for (const variant of variants) {
+      if (!BRIDGE_WORKFLOW_BY_ID.has(variant)) {
+        throw new Error(`${kind} execution variant '${variant}' has no registered template`)
+      }
+    }
+  }
+}
 
 export function renderWorkflow(kind: AigcKind, params: RenderWorkflowParams): RenderedWorkflow {
   if (kind === "image") return renderImageWorkflow(params)
-  const configs = kind === "video" ? VIDEO_WORKFLOWS : MODEL3D_WORKFLOWS
-  return renderBridgeWorkflow(kind, configs, params)
+  return renderBridgeWorkflow(kind, params)
 }
 
 function renderBridgeWorkflow(
   kind: AigcKind,
-  configs: BridgeWorkflowConfig[],
   params: RenderWorkflowParams,
 ): RenderedWorkflow {
-  if (configs.length === 0) throw new WorkflowNotConfiguredError(kind)
-  const config = resolveBridgeWorkflow(kind, configs, params.input)
+  const execution = workflowExecutionFor(kind, params.workflowId, params.provider)
+  if (!execution) throw new UnknownWorkflowError(kind, params.workflowId)
   const seed = seedFromInput(params.input)
   const referenceNames = referenceNamesFrom(params.input)
   const usesReference = referenceNames.length > 0
-  if (usesReference && (!config.referenceTemplate || !config.referenceId || !config.referenceCount)) {
+  if (usesReference && !execution.reference?.enabled) {
     throw new WorkflowReferenceInputError("reference_images_not_supported")
   }
   // 欠槽的 API-node 输入是否 optional 尚未真机验证。v1 只接受导出图的完整槽位，避免向
   // ComfyUI 提交靠猜测裁剪出的图；验证后可在 capability + 这里一起放宽。
-  if (usesReference && referenceNames.length !== config.referenceCount) {
+  if (
+    usesReference &&
+    execution.reference &&
+    (referenceNames.length < execution.reference.minImages || referenceNames.length > execution.reference.maxImages)
+  ) {
     throw new WorkflowReferenceInputError("invalid_reference_image_count")
   }
+  const resolved = resolveExecutionVariant(kind, params.workflowId, params.provider, referenceNames.length)
+  if (!resolved) throw new WorkflowReferenceInputError("invalid_reference_image_count")
+  const variant = resolved.variant
+  const config = BRIDGE_WORKFLOW_BY_ID.get(variant)
+  if (!config) throw new Error(`${kind} execution variant '${variant}' has no registered template`)
   const rendered = usesReference
-    ? renderReferenceWorkflow(config.referenceTemplate, { PROMPT: params.prompt, SEED: seed }, referenceNames)
+    ? renderReferenceWorkflow(config.template, { PROMPT: params.prompt, SEED: seed }, referenceNames)
     : renderTemplate(config.template, { PROMPT: params.prompt, SEED: seed })
   if (!isRecord(rendered)) throw new Error(`${kind} workflow '${config.id}' rendered to a non-object`)
   return {
-    id: usesReference ? (config.referenceId as string) : config.id,
-    templateVersion: config.templateVersion,
+    id: config.id,
+    templateVersion: execution.templateVersion,
     workflow: rendered,
     needsGpu: config.needsGpu,
     gpuClass: config.gpuClass,
@@ -176,19 +224,6 @@ export class WorkflowReferenceInputError extends Error {
     super(code)
     this.code = code
   }
-}
-
-function resolveBridgeWorkflow(
-  kind: AigcKind,
-  configs: BridgeWorkflowConfig[],
-  input: Record<string, unknown>,
-): BridgeWorkflowConfig {
-  const requested = firstString(input.workflowId, input.workflow_id, input.workflow, input.mode)?.toLowerCase()
-  if (!requested) return configs[0]
-  const found = configs.find((c) => c.id === requested || c.aliases.includes(requested))
-  // 未知工作流 → 明确拒绝(M9),不静默回退默认,避免错扣费/错产物。与图片 registry 一致。
-  if (!found) throw new UnknownWorkflowError(kind, requested)
-  return found
 }
 
 function seedFromInput(input: Record<string, unknown>): number {

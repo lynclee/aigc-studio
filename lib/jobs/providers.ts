@@ -21,7 +21,7 @@ import {
   submitOpenRouterImage,
 } from "@/lib/engines/openrouter-image"
 import { ProviderConfigurationError, ProviderContractError } from "@/lib/engines/provider-utils"
-import type { WorkflowProvider } from "@/lib/workflows/capabilities"
+import type { WorkflowProvider } from "@/lib/workflows/definitions"
 
 // 各创作类型的后端优先/默认:图片 Modal → OpenRouter → fal;视频/3D 目前默认 fal,可切 modal-bridge。
 // 这不是自动 fallback;实际用哪个只由对应的 AIGC_*_PROVIDER 决定。
