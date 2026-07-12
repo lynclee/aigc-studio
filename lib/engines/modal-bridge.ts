@@ -145,6 +145,9 @@ async function mapBridgeStatus(
       if (error instanceof DeliveryVerifyError) {
         return { status: "failed", response, error: `delivery verification failed: ${error.code}`, assets: [] }
       }
+      // 当前 reconciler 已失去 fencing lease：必须交回上层读真实状态，不能伪装成
+      // provider 仍在 running，否则后续 updateClaimedJob 会制造无意义的 DB 错误噪音。
+      if ((error as { code?: unknown })?.code === "reconcile_lease_lost") throw error
       // R2 未配置 / HeadObject 瞬时错误 → 保守当作仍在跑,让下次轮询重试,不误判。
       return { status: "running", response, assets: [] }
     }

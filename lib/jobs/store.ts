@@ -14,6 +14,7 @@ import type {
 } from "@/lib/aigc/types"
 import { isRecord } from "@/lib/aigc/http"
 import { storeProviderAssetsInR2 } from "@/lib/assets/r2-store"
+import { deleteObject } from "@/lib/r2"
 
 export class BackendStoreError extends Error {
   constructor(message: string, public readonly status = 500) {
@@ -396,7 +397,16 @@ export async function finalizeJobWithAssets(
     p_assets: assetsPayload,
   })
   if (error) throw new BackendStoreError(`finalize job failed: ${error.message}`)
-  if (data === null || data === undefined) return null // fence 失败 → 幂等 no-op
+  if (data === null || data === undefined) {
+    // RPC 明确返回 null = 本 attempt 没有提交 DB。URL-provider 使用 claim-token
+    // 版本 key，可安全删除这一 losing attempt 的对象；已有 r2Key 的 aigc-r2
+    // 资产由 delivery staging/final 清理链负责，不能在这里误删。
+    const losingKeys = storedAssets
+      .filter((_stored, index) => Boolean(assets[index]?.url) && !assets[index]?.r2Key)
+      .flatMap((stored) => (stored.r2Key ? [stored.r2Key] : []))
+    await Promise.all(losingKeys.map((key) => deleteObject(key))).catch(() => {})
+    return null
+  }
 
   const { generation, assets: persistedAssets } = await getGenerationForJob(job.id, job.user_id)
   if (!generation) return null

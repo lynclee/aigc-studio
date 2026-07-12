@@ -9,6 +9,7 @@ import {
   finalizeJobWithAssets,
   getGenerationForJob,
   getOwnedJob,
+  JobLeaseLostError,
   releaseClaimedJob,
   renewClaimedJobLease,
   terminalStatus,
@@ -56,6 +57,15 @@ export async function reconcileJob(job: AigcJobRecord): Promise<ReconcileResult>
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
+    if (isLeaseLostError(error)) {
+      // Ownership 已转移；不要再 release/fail（都会使用失效 token）。直接读取赢家状态。
+      const fresh = await getOwnedJob(claimedJob.id, claimedJob.user_id)
+      if (fresh?.status === "succeeded") {
+        const { generation, assets } = await getGenerationForJob(fresh.id, fresh.user_id)
+        return { job: fresh, generation, assets, changed: true }
+      }
+      return { job: fresh ?? job, generation: null, assets: [], changed: true }
+    }
     if (isTransientProviderPollError(error)) {
       // M4:瞬时错误也受最大时长约束,否则持续瞬时失败会永久 running、占满配额。
       if (isPastMaxAge(claimedJob)) {
@@ -112,6 +122,10 @@ export async function reconcileJob(job: AigcJobRecord): Promise<ReconcileResult>
 
   const releasedJob = await releaseClaimedJob(currentJob)
   return { job: releasedJob, generation: null, assets: [], changed: true }
+}
+
+export function isLeaseLostError(error: unknown): boolean {
+  return error instanceof JobLeaseLostError || (error as { code?: unknown })?.code === "reconcile_lease_lost"
 }
 
 function isTransientProviderPollError(error: unknown): boolean {
