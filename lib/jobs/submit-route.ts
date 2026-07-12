@@ -24,7 +24,7 @@ export async function handleGeneratePost(req: Request, kind: AigcKind): Promise<
 
     let updatedJob: AigcJobRecord
     try {
-      const submission = await submitProvider(kind, request)
+      const submission = await submitProvider(kind, request, { jobId: job.id })
       updatedJob = await attachProviderSubmission(job.id, submission)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

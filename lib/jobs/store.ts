@@ -99,7 +99,7 @@ export async function attachProviderSubmission(
       provider: submission.provider,
       provider_job_id: submission.providerJobId,
       provider_status_url: submission.statusUrl ?? null,
-      provider_response: submission.response,
+      provider_response: redactObjectSecrets(submission.response),
       updated_at: now,
       completed_at: terminal ? now : null,
     })
@@ -151,8 +151,8 @@ export async function updateClaimedJobFromProviderStatus(
     .from("aigc_jobs")
     .update({
       status: statusResult.status === "succeeded" ? "running" : statusResult.status,
-      provider_response: statusResult.response,
-      error: statusResult.error ?? null,
+      provider_response: redactObjectSecrets(statusResult.response),
+      error: statusResult.error ? sanitizeStoredError(statusResult.error) : null,
       updated_at: now,
       completed_at: terminal ? job.completed_at ?? now : null,
       reconcile_token: terminal ? null : job.reconcile_token,
@@ -191,7 +191,7 @@ export async function failClaimedJob(job: ClaimedAigcJobRecord, errorMessage: st
     .from("aigc_jobs")
     .update({
       status: "failed",
-      error: errorMessage,
+      error: sanitizeStoredError(errorMessage),
       updated_at: now,
       completed_at: now,
       reconcile_token: null,
@@ -205,29 +205,59 @@ export async function failClaimedJob(job: ClaimedAigcJobRecord, errorMessage: st
   return data as AigcJobRecord
 }
 
-export async function completeClaimedJob(job: ClaimedAigcJobRecord): Promise<AigcJobRecord> {
-  const admin = requireAigcAdmin()
-  const now = new Date().toISOString()
-  const { data, error } = await admin
-    .from("aigc_jobs")
-    .update({
-      status: "succeeded",
-      error: null,
-      updated_at: now,
-      completed_at: job.completed_at ?? now,
-      reconcile_token: null,
-      reconcile_lease_until: null,
-    })
-    .eq("id", job.id)
-    .eq("reconcile_token", job.reconcile_token)
-    .select("*")
-    .single()
-  if (error) throw new BackendStoreError(`complete claimed job failed: ${error.message}`)
-  return data as AigcJobRecord
-}
+// 落库前的服务端 env 密钥,若上游 error 回显其精确值则抹掉(最强,格式无关)。
+const SANITIZE_SECRET_ENV_NAMES = [
+  "BRIDGE_DELIVERY_TOKEN_SECRET",
+  "MODAL_BRIDGE_API_KEY",
+  "MODAL_KEY",
+  "MODAL_SECRET",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "R2_ACCESS_KEY_ID",
+  "R2_SECRET_ACCESS_KEY",
+  "CRON_SECRET",
+  "VERCEL_AUTOMATION_BYPASS_SECRET",
+  "OPENROUTER_API_KEY",
+  "FAL_KEY",
+  "COMFY_ORG_API_KEY",
+]
 
 function sanitizeStoredError(message: string): string {
-  return message.replace(/https?:\/\/\S+/g, "[url]").slice(0, 500)
+  let out = message
+  // 1. 已知 env 密钥的精确值 → [redacted](H6:防上游 error 回显把密钥带进 DB)。
+  for (const name of SANITIZE_SECRET_ENV_NAMES) {
+    const value = process.env[name]
+    if (value && value.length >= 8) out = out.split(value).join("[redacted]")
+  }
+  // 2. 常见 credential 模式:*_key / token / secret / authorization = 值,以及 bearer 令牌。
+  out = out
+    .replace(/\b([\w-]*(?:key|token|secret|password|authorization))\b\s*[:=]\s*[^\s,;"']+/gi, "$1=[redacted]")
+    .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]+/gi, "bearer [redacted]")
+    .replace(/https?:\/\/\S+/g, "[url]")
+  return out.slice(0, 500)
+}
+
+// 深度抹掉对象里出现的已知 env 密钥精确值(F3:provider_response 整 JSON 会落 aigc_jobs 并复制到
+// generation.metadata,若某 provider 在响应里回显了密钥,不脱敏就进 DB)。
+function redactObjectSecrets<T>(value: T): T {
+  const secrets = SANITIZE_SECRET_ENV_NAMES.map((name) => process.env[name]).filter(
+    (v): v is string => typeof v === "string" && v.length >= 8,
+  )
+  if (secrets.length === 0) return value
+  const walk = (input: unknown): unknown => {
+    if (typeof input === "string") {
+      let out = input
+      for (const secret of secrets) out = out.split(secret).join("[redacted]")
+      return out
+    }
+    if (Array.isArray(input)) return input.map(walk)
+    if (input && typeof input === "object") {
+      const result: Record<string, unknown> = {}
+      for (const [key, val] of Object.entries(input)) result[key] = walk(val)
+      return result
+    }
+    return input
+  }
+  return walk(value) as T
 }
 
 export async function markJobFailed(jobId: string, errorMessage: string): Promise<void> {
@@ -236,7 +266,7 @@ export async function markJobFailed(jobId: string, errorMessage: string): Promis
     .from("aigc_jobs")
     .update({
       status: "failed",
-      error: errorMessage,
+      error: sanitizeStoredError(errorMessage),
       updated_at: new Date().toISOString(),
       completed_at: new Date().toISOString(),
     })
@@ -282,10 +312,15 @@ export async function listActiveJobs(limit = 50): Promise<AigcJobRecord[]> {
   return (data ?? []) as AigcJobRecord[]
 }
 
-export async function materializeCompletedJob(
-  job: AigcJobRecord,
+/**
+ * 原子化落库(H4):R2 侧固化(下载/透传)后,把 generation+assets+succeeded 交给
+ * `finalize_job_assets` RPC 一个事务完成,并 fence reconcile_token。
+ * 返回 null 表示租约已失(别人已落库/被取消/已终态)→ 调用方按幂等 no-op 处理。
+ */
+export async function finalizeJobWithAssets(
+  job: ClaimedAigcJobRecord,
   assets: ProviderOutputAsset[],
-): Promise<{ generation: AigcGenerationRecord; assets: AigcAssetRecord[] }> {
+): Promise<{ generation: AigcGenerationRecord; assets: AigcAssetRecord[] } | null> {
   const admin = requireAigcAdmin()
   const storedAssets = await storeProviderAssetsInR2({
     userId: job.user_id,
@@ -293,7 +328,6 @@ export async function materializeCompletedJob(
     kind: job.kind,
     assets,
   })
-
   if (storedAssets.length === 0) {
     throw new BackendStoreError("materialize assets failed: provider completed without any persistable assets")
   }
@@ -305,57 +339,32 @@ export async function materializeCompletedJob(
 
   const request = isRecord(job.request) ? job.request : {}
   const prompt = typeof request.prompt === "string" ? request.prompt : null
-  const { data: generation, error: generationError } = await admin
-    .from("aigc_generations")
-    .upsert(
-      {
-        job_id: job.id,
-        user_id: job.user_id,
-        kind: job.kind,
-        workflow_id: job.workflow_id,
-        prompt,
-        provider: job.provider,
-        provider_job_id: job.provider_job_id,
-        metadata: { provider_response: job.provider_response },
-      },
-      { onConflict: "job_id" },
-    )
-    .select("*")
-    .single()
-  if (generationError) {
-    throw new BackendStoreError(`materialize generation failed: ${generationError.message}`)
-  }
-
-  const generationRecord = generation as AigcGenerationRecord
-  const rows = storedAssets.map((asset, index) => ({
-    generation_id: generationRecord.id,
-    job_id: job.id,
-    user_id: job.user_id,
-    kind: job.kind,
+  const assetsPayload = storedAssets.map((asset, index) => ({
     asset_type: asset.assetType || "output",
     position: asset.position ?? index,
     r2_key: asset.r2Key as string,
-    source_url: null,
     content_type: asset.contentType ?? null,
     metadata: asset.metadata ?? {},
   }))
 
-  const { data: assetRows, error: assetError } = await admin
-    .from("aigc_assets")
-    .upsert(rows, { onConflict: "job_id,asset_type,position" })
-    .select("*")
-  if (assetError) {
-    await admin.from("aigc_generations").delete().eq("id", generationRecord.id)
-    throw new BackendStoreError(`materialize assets failed: ${assetError.message}`)
-  }
+  const { data, error } = await admin.rpc("finalize_job_assets", {
+    p_job_id: job.id,
+    p_reconcile_token: job.reconcile_token,
+    p_kind: job.kind,
+    p_workflow_id: job.workflow_id,
+    p_user_id: job.user_id,
+    p_prompt: prompt,
+    p_provider: job.provider,
+    p_provider_job_id: job.provider_job_id,
+    p_generation_metadata: { provider_response: job.provider_response },
+    p_assets: assetsPayload,
+  })
+  if (error) throw new BackendStoreError(`finalize job failed: ${error.message}`)
+  if (data === null || data === undefined) return null // fence 失败 → 幂等 no-op
 
-  const persistedAssets = (assetRows ?? []) as AigcAssetRecord[]
-  if (persistedAssets.length === 0 || persistedAssets.some((asset) => !asset.r2_key)) {
-    await admin.from("aigc_generations").delete().eq("id", generationRecord.id)
-    throw new BackendStoreError("materialize assets failed: persisted assets missing required R2 keys")
-  }
-
-  return { generation: generationRecord, assets: persistedAssets }
+  const { generation, assets: persistedAssets } = await getGenerationForJob(job.id, job.user_id)
+  if (!generation) return null
+  return { generation, assets: persistedAssets }
 }
 
 export async function getGenerationForJob(jobId: string, userId: string): Promise<{
@@ -450,4 +459,15 @@ export async function markJobCancelled(job: AigcJobRecord, response: Record<stri
 
 export function terminalStatus(status: JobStatus): boolean {
   return status === "succeeded" || status === "failed" || status === "cancelled"
+}
+
+/** 某个 r2_key 是否已是入库的活资产。孤儿清理删对象前的安全闸门:是则绝不删。 */
+export async function assetExistsForKey(r2Key: string): Promise<boolean> {
+  const admin = requireAigcAdmin()
+  const { count, error } = await admin
+    .from("aigc_assets")
+    .select("id", { count: "exact", head: true })
+    .eq("r2_key", r2Key)
+  if (error) throw new BackendStoreError(`check asset by key failed: ${error.message}`)
+  return (count ?? 0) > 0
 }

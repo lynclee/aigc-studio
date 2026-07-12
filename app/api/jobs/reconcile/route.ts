@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { jsonError } from "@/lib/jobs/api"
 import { reconcileJob } from "@/lib/jobs/reconcile"
 import { listActiveJobs } from "@/lib/jobs/store"
+import { cleanupOrphanDeliveries, type OrphanCleanupResult } from "@/lib/delivery/cleanup"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -37,6 +38,14 @@ export async function GET(req: Request) {
       }
     }
 
+    // 对账后清理 aigc-r2 交付的孤儿 R2 对象(上传中 cancel / 核验失败留下的)。失败不影响对账结果。
+    let orphanCleanup: OrphanCleanupResult = { scanned: 0, deleted: 0, reconciled: 0, failed: 0 }
+    try {
+      orphanCleanup = await cleanupOrphanDeliveries(100)
+    } catch (error) {
+      console.error("orphan cleanup error", { type: error instanceof Error ? error.name : typeof error })
+    }
+
     return NextResponse.json({
       ok: true,
       checked: jobs.length,
@@ -47,6 +56,7 @@ export async function GET(req: Request) {
       failedJobs,
       reconcileErrors,
       failureSamples,
+      orphanCleanup,
     })
   } catch (error) {
     return jsonError(error)

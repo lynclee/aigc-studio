@@ -1,12 +1,14 @@
 import type { AigcAssetRecord, AigcGenerationRecord, AigcJobRecord, ProviderStatusResult } from "@/lib/aigc/types"
 import { FetchJsonTimeoutError, HttpJsonError } from "@/lib/aigc/http"
+import { deleteObject } from "@/lib/r2"
+import { stagingKeyForFinal } from "@/lib/delivery/asset-policy"
 import { pollProviderStatus } from "@/lib/jobs/providers"
 import {
   claimJobForReconcile,
-  completeClaimedJob,
   failClaimedJob,
+  finalizeJobWithAssets,
   getGenerationForJob,
-  materializeCompletedJob,
+  getOwnedJob,
   releaseClaimedJob,
   terminalStatus,
   updateClaimedJobFromProviderStatus,
@@ -18,6 +20,10 @@ export type ReconcileResult = {
   assets: AigcAssetRecord[]
   changed: boolean
 }
+
+// job 最大运行时长兜底(M7):超时仍未终态 → 明确失败,不让任何 job 永久 running 占配额。
+// 取 3h:略大于 delivery_token 的 2h 生命周期,过期后本也换不到新上传地址。
+const MAX_JOB_AGE_MS = 3 * 60 * 60 * 1000
 
 export async function reconcileJob(job: AigcJobRecord): Promise<ReconcileResult> {
   if (terminalStatus(job.status)) {
@@ -54,31 +60,41 @@ export async function reconcileJob(job: AigcJobRecord): Promise<ReconcileResult>
   const currentJob = await updateClaimedJobFromProviderStatus(claimedJob, providerStatus)
 
   if (providerStatus.status === "succeeded") {
-    let materialized: Awaited<ReturnType<typeof materializeCompletedJob>>
+    let finalized: Awaited<ReturnType<typeof finalizeJobWithAssets>>
     try {
-      materialized = await materializeCompletedJob(currentJob, providerStatus.assets)
+      finalized = await finalizeJobWithAssets(currentJob, providerStatus.assets)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       const failedJob = await failClaimedJob(currentJob, message)
       return { job: failedJob, generation: null, assets: [], changed: true }
     }
 
-    try {
-      const completedJob = await completeClaimedJob(currentJob)
-      return { job: completedJob, generation: materialized.generation, assets: materialized.assets, changed: true }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      try {
-        const releasedJob = await releaseClaimedJob(currentJob, message)
-        return { job: releasedJob, generation: null, assets: [], changed: true }
-      } catch {
-        return { job: currentJob, generation: null, assets: [], changed: true }
+    // fence 失败(别人已落库 / 租约失效 / 已被取消)→ 读回真实状态,幂等。
+    if (!finalized) {
+      const fresh = await getOwnedJob(currentJob.id, currentJob.user_id)
+      if (fresh?.status === "succeeded") {
+        const { generation, assets } = await getGenerationForJob(fresh.id, fresh.user_id)
+        return { job: fresh, generation, assets, changed: true }
       }
+      return { job: fresh ?? currentJob, generation: null, assets: [], changed: true }
     }
+
+    const succeededJob = (await getOwnedJob(currentJob.id, currentJob.user_id)) ?? currentJob
+    // F1:兜底路径也删 staging(job-complete 走 :80 删;这里补上),否则要等到下次 cleanup 才清。
+    await Promise.all(
+      finalized.assets.filter((a) => a.r2_key).map((a) => deleteObject(stagingKeyForFinal(a.r2_key as string))),
+    ).catch(() => {})
+    return { job: succeededJob, generation: finalized.generation, assets: finalized.assets, changed: true }
   }
 
   if (terminalStatus(providerStatus.status)) {
     return { job: currentJob, generation: null, assets: [], changed: true }
+  }
+
+  // 仍在跑但已超最大时长(state 丢失/永久错误/卡死)→ 明确失败,不无限徘徊(M7)。
+  if (Date.parse(currentJob.created_at) > 0 && Date.now() - Date.parse(currentJob.created_at) > MAX_JOB_AGE_MS) {
+    const failedJob = await failClaimedJob(currentJob, "job exceeded maximum runtime")
+    return { job: failedJob, generation: null, assets: [], changed: true }
   }
 
   const releasedJob = await releaseClaimedJob(currentJob)
