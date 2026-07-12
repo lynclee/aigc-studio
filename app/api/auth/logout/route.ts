@@ -1,6 +1,6 @@
 /**
  * POST /api/auth/logout
- * 清会话 cookie → 302 回首页。
+ * 清 Supabase Auth 会话 cookie → 302 回首页。
  */
 
 import { NextResponse, type NextRequest } from "next/server"

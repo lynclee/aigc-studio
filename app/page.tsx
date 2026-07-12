@@ -3,30 +3,36 @@ import { getSession } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
 
-/** 飞书图标(简化版本,内联 SVG 避免依赖) */
-function LarkIcon({ className }: { className?: string }) {
+function GitHubIcon({ className }: { className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      fill="none"
+      fill="currentColor"
       className={className}
       aria-hidden="true"
     >
-      <path
-        d="M12 3c-1.1 2.6-3 4.9-5.4 6.6C4.4 11 2.6 11.8 1 12c2.4 1.1 4.6 2.7 6.4 4.7C9.2 18.7 10.4 21 11 23c.9-2.6 2.4-4.9 4.4-6.7 2-1.8 4.3-3 6.6-3.6-2.6-.6-5-1.9-7-3.7C13.2 7.2 12.3 5.2 12 3Z"
-        fill="currentColor"
-      />
+      <path d="M12 2C6.48 2 2 6.58 2 12.23c0 4.52 2.87 8.35 6.84 9.71.5.1.68-.22.68-.49 0-.24-.01-1.04-.02-1.88-2.78.62-3.37-1.2-3.37-1.2-.46-1.2-1.11-1.51-1.11-1.51-.91-.64.07-.63.07-.63 1 .07 1.54 1.06 1.54 1.06.9 1.57 2.35 1.12 2.92.86.09-.67.35-1.12.64-1.38-2.22-.26-4.56-1.14-4.56-5.08 0-1.12.39-2.03 1.04-2.75-.1-.26-.45-1.3.1-2.71 0 0 .85-.28 2.75 1.05A9.3 9.3 0 0 1 12 7.2c.85 0 1.7.12 2.5.35 1.9-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.65.72 1.04 1.63 1.04 2.75 0 3.95-2.35 4.82-4.58 5.08.36.32.68.92.68 1.85 0 1.34-.01 2.42-.01 2.75 0 .27.18.6.69.49A10.26 10.26 0 0 0 22 12.23C22 6.58 17.52 2 12 2Z" />
+    </svg>
+  )
+}
+
+function GoogleIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <path fill="#4285F4" d="M21.6 12.23c0-.72-.06-1.41-.19-2.07H12v3.92h5.38a4.6 4.6 0 0 1-2 3.02v2.55h3.24c1.9-1.79 2.98-4.43 2.98-7.42Z" />
+      <path fill="#34A853" d="M12 22c2.7 0 4.96-.91 6.62-2.35l-3.24-2.55c-.9.62-2.05.99-3.38.99-2.6 0-4.8-1.8-5.59-4.21H3.07v2.63A10 10 0 0 0 12 22Z" />
+      <path fill="#FBBC05" d="M6.41 13.88A6.1 6.1 0 0 1 6.1 12c0-.65.11-1.28.31-1.88V7.49H3.07A10.2 10.2 0 0 0 2 12c0 1.63.39 3.17 1.07 4.51l3.34-2.63Z" />
+      <path fill="#EA4335" d="M12 5.91c1.47 0 2.79.52 3.83 1.53l2.87-2.94C16.95 2.82 14.7 2 12 2a10 10 0 0 0-8.93 5.49l3.34 2.63C7.2 7.71 9.4 5.91 12 5.91Z" />
     </svg>
   )
 }
 
 /**
- * 登录失败错误码 → 固定中文文案。只渲染映射命中的文案,绝不回显 URL 里的任意 error 文本,
- * 避免反射飞书/异常的原始 message(信息泄露 / 反射型注入面)。
+ * 登录失败错误码 → 固定中文文案。只渲染映射命中的文案,绝不回显 OAuth 原始 message。
  */
 const ERROR_MESSAGES: Record<string, string> = {
   oauth_failed: "登录失败,请重试",
-  state_mismatch: "登录态校验失败,请重新登录",
+  auth_unconfigured: "登录服务尚未配置,请联系部署同学",
 }
 
 export default async function HomePage({
@@ -69,15 +75,23 @@ export default async function HomePage({
         ) : null}
 
         <a
-          href="/api/auth/lark/login"
+          href="/api/auth/github/login"
           className="group flex w-full items-center justify-center gap-3 rounded-xl bg-white px-5 py-3 text-sm font-medium text-neutral-900 shadow-sm transition hover:bg-neutral-100 active:scale-[0.99]"
         >
-          <LarkIcon className="h-5 w-5 text-[#00D6B9]" />
-          用飞书登录
+          <GitHubIcon className="h-5 w-5 text-neutral-900" />
+          使用 GitHub 登录
+        </a>
+
+        <a
+          href="/api/auth/google/login"
+          className="mt-3 flex w-full items-center justify-center gap-3 rounded-xl border border-white/15 bg-white/[0.04] px-5 py-3 text-sm font-medium text-white transition hover:bg-white/[0.08] active:scale-[0.99]"
+        >
+          <GoogleIcon className="h-5 w-5" />
+          使用 Google / Gmail 登录
         </a>
 
         <p className="mt-6 text-center text-xs text-neutral-500">
-          登录即代表同意通过飞书获取你的姓名与头像
+          GitHub 登录优先；也可使用 Google / Gmail 登录
         </p>
       </div>
 

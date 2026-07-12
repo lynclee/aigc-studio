@@ -71,7 +71,7 @@ function buildModalRunBody(
   const images = modalImagesFrom(request.input)
   return {
     workflow: rendered.workflow,
-    user_id: request.userOpenId,
+    user_id: request.userId,
     ...(gpu ? { gpu } : {}),
     ...(images ? { images } : {}),
     prompt: request.prompt,

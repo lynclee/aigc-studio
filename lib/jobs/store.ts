@@ -38,17 +38,17 @@ export function requireAigcAdmin(): SupabaseClient {
 }
 
 export async function createQueuedJob(params: {
-  userOpenId: string
+  userId: string
   kind: AigcKind
   provider: string
   request: SubmitRequest
 }): Promise<AigcJobRecord> {
   const admin = requireAigcAdmin()
-  await assertOwnerCanCreateJob(params.userOpenId)
+  await assertOwnerCanCreateJob(params.userId)
   const { data, error } = await admin
     .from("aigc_jobs")
     .insert({
-      user_open_id: params.userOpenId,
+      user_id: params.userId,
       kind: params.kind,
       workflow_id: params.request.workflowId,
       status: "queued",
@@ -61,12 +61,12 @@ export async function createQueuedJob(params: {
   return data as AigcJobRecord
 }
 
-export async function assertOwnerCanCreateJob(userOpenId: string): Promise<void> {
+export async function assertOwnerCanCreateJob(userId: string): Promise<void> {
   const admin = requireAigcAdmin()
   const { count: activeCount, error: activeError } = await admin
     .from("aigc_jobs")
     .select("id", { count: "exact", head: true })
-    .eq("user_open_id", userOpenId)
+    .eq("user_id", userId)
     .in("status", ["queued", "running"])
   if (activeError) throw new BackendStoreError(`check active job limit failed: ${activeError.message}`)
   if ((activeCount ?? 0) >= 3) {
@@ -77,7 +77,7 @@ export async function assertOwnerCanCreateJob(userOpenId: string): Promise<void>
   const { count: recentCount, error: recentError } = await admin
     .from("aigc_jobs")
     .select("id", { count: "exact", head: true })
-    .eq("user_open_id", userOpenId)
+    .eq("user_id", userId)
     .gte("created_at", since)
   if (recentError) throw new BackendStoreError(`check recent job limit failed: ${recentError.message}`)
   if ((recentCount ?? 0) >= 10) {
@@ -243,24 +243,24 @@ export async function markJobFailed(jobId: string, errorMessage: string): Promis
     .eq("id", jobId)
 }
 
-export async function getOwnedJob(jobId: string, userOpenId: string): Promise<AigcJobRecord | null> {
+export async function getOwnedJob(jobId: string, userId: string): Promise<AigcJobRecord | null> {
   const admin = requireAigcAdmin()
   const { data, error } = await admin
     .from("aigc_jobs")
     .select("*")
     .eq("id", jobId)
-    .eq("user_open_id", userOpenId)
+    .eq("user_id", userId)
     .maybeSingle()
   if (error) throw new BackendStoreError(`load job failed: ${error.message}`)
   return (data as AigcJobRecord | null) ?? null
 }
 
-export async function listOwnedJobs(userOpenId: string, limit = 25): Promise<AigcJobRecord[]> {
+export async function listOwnedJobs(userId: string, limit = 25): Promise<AigcJobRecord[]> {
   const admin = requireAigcAdmin()
   const { data, error } = await admin
     .from("aigc_jobs")
     .select("*")
-    .eq("user_open_id", userOpenId)
+    .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(limit)
   if (error) throw new BackendStoreError(`list jobs failed: ${error.message}`)
@@ -288,7 +288,7 @@ export async function materializeCompletedJob(
 ): Promise<{ generation: AigcGenerationRecord; assets: AigcAssetRecord[] }> {
   const admin = requireAigcAdmin()
   const storedAssets = await storeProviderAssetsInR2({
-    userOpenId: job.user_open_id,
+    userId: job.user_id,
     jobId: job.id,
     kind: job.kind,
     assets,
@@ -310,7 +310,7 @@ export async function materializeCompletedJob(
     .upsert(
       {
         job_id: job.id,
-        user_open_id: job.user_open_id,
+        user_id: job.user_id,
         kind: job.kind,
         workflow_id: job.workflow_id,
         prompt,
@@ -330,7 +330,7 @@ export async function materializeCompletedJob(
   const rows = storedAssets.map((asset, index) => ({
     generation_id: generationRecord.id,
     job_id: job.id,
-    user_open_id: job.user_open_id,
+    user_id: job.user_id,
     kind: job.kind,
     asset_type: asset.assetType || "output",
     position: asset.position ?? index,
@@ -358,7 +358,7 @@ export async function materializeCompletedJob(
   return { generation: generationRecord, assets: persistedAssets }
 }
 
-export async function getGenerationForJob(jobId: string, userOpenId: string): Promise<{
+export async function getGenerationForJob(jobId: string, userId: string): Promise<{
   generation: AigcGenerationRecord | null
   assets: AigcAssetRecord[]
 }> {
@@ -367,7 +367,7 @@ export async function getGenerationForJob(jobId: string, userOpenId: string): Pr
     .from("aigc_generations")
     .select("*")
     .eq("job_id", jobId)
-    .eq("user_open_id", userOpenId)
+    .eq("user_id", userId)
     .maybeSingle()
   if (error) throw new BackendStoreError(`load generation failed: ${error.message}`)
   if (!generation) return { generation: null, assets: [] }
@@ -376,14 +376,14 @@ export async function getGenerationForJob(jobId: string, userOpenId: string): Pr
     .from("aigc_assets")
     .select("*")
     .eq("generation_id", (generation as AigcGenerationRecord).id)
-    .eq("user_open_id", userOpenId)
+    .eq("user_id", userId)
     .not("r2_key", "is", null)
     .order("position", { ascending: true })
   if (assetError) throw new BackendStoreError(`load assets failed: ${assetError.message}`)
   return { generation: generation as AigcGenerationRecord, assets: (assets ?? []) as AigcAssetRecord[] }
 }
 
-export async function listUserLibrary(userOpenId: string): Promise<{
+export async function listUserLibrary(userId: string): Promise<{
   generations: AigcGenerationRecord[]
   assets: AigcAssetRecord[]
 }> {
@@ -391,7 +391,7 @@ export async function listUserLibrary(userOpenId: string): Promise<{
   const { data: generations, error } = await admin
     .from("aigc_generations")
     .select("*, aigc_jobs!inner(status)")
-    .eq("user_open_id", userOpenId)
+    .eq("user_id", userId)
     .eq("aigc_jobs.status", "succeeded")
     .order("created_at", { ascending: false })
     .limit(100)
@@ -404,7 +404,7 @@ export async function listUserLibrary(userOpenId: string): Promise<{
   const { data: assets, error: assetError } = await admin
     .from("aigc_assets")
     .select("*")
-    .eq("user_open_id", userOpenId)
+    .eq("user_id", userId)
     .in("generation_id", ids)
     .not("r2_key", "is", null)
     .order("created_at", { ascending: false })

@@ -20,13 +20,11 @@ set_kv() {
 ask()  { local k="$1" p="$2" v; read -r    -p "  $p [$k] (留空跳过): " v; set_kv "$k" "$v"; }   # 可见
 asks() { local k="$1" p="$2" v; read -r -s -p "  $p [$k] (留空跳过): " v; echo; set_kv "$k" "$v"; } # 隐藏
 
-echo "── 飞书 / Lark ──"
-ask  LARK_APP_ID            "App ID"
-asks LARK_APP_SECRET        "App Secret"
-ask  LARK_REDIRECT_URI      "回调 URL(https://<域名>/api/auth/lark/callback)"
-echo "── Supabase ──"
+echo "── Supabase（GitHub / Google 登录与数据库）──"
+ask  NEXT_PUBLIC_SITE_URL          "网站稳定地址(例如 https://studio.example.com)"
 ask  NEXT_PUBLIC_SUPABASE_URL      "Project URL"
-asks SUPABASE_SERVICE_ROLE_KEY     "service_role key"
+ask  NEXT_PUBLIC_SUPABASE_ANON_KEY "anon key（可公开，用于登录）"
+asks SUPABASE_SERVICE_ROLE_KEY     "service_role key（仅服务端）"
 echo "── Cloudflare R2 ──"
 ask  R2_ACCOUNT_ID        "Account ID"
 asks R2_ACCESS_KEY_ID     "Access Key ID"
@@ -75,8 +73,8 @@ ask FAL_MODEL3D_STANDARD_ENDPOINT "可选标准 3D Endpoint 覆盖"
 ask FAL_MODEL3D_GAME_ASSET_ENDPOINT "可选游戏资产 3D Endpoint 覆盖"
 ask FAL_VIDEO_ENDPOINT "可选视频 Endpoint 覆盖"
 ask AIGC_ASSET_HOST_ALLOWLIST "可选输出文件域名白名单(逗号分隔;默认可信列表够用就留空)"
-echo "── 自生成密钥(敏感输入不回显;直接回车=用 openssl 自动生成一串)──"
-for k in SESSION_SECRET CRON_SECRET; do
+echo "── 后台任务密钥(敏感输入不回显;直接回车=用 openssl 自动生成一串)──"
+for k in CRON_SECRET; do
   read -r -s -p "  $k (回车=自动生成): " v; echo
   [ -z "$v" ] && v="$(openssl rand -hex 32)"
   set_kv "$k" "$v"

@@ -12,7 +12,7 @@ const EXT_BY_CONTENT_TYPE: Record<string, string> = {
 export const MAX_INLINE_IMAGE_BYTES = 25 * 1024 * 1024
 
 export async function storeImageBytesInR2(params: {
-  userOpenId: string
+  userId: string
   providerJobId: string
   position: number
   bytes: Uint8Array
@@ -30,7 +30,7 @@ export async function storeImageBytesInR2(params: {
   const r2 = getR2Client()
   if (!r2) throw new Error("R2 asset persistence is required but R2 is not configured")
 
-  const key = `${safeR2Segment(params.userOpenId)}/${safeR2Segment(params.providerJobId)}/image-${params.position}.${extensionForContentType(normalizedContentType)}`
+  const key = `${safeR2Segment(params.userId)}/${safeR2Segment(params.providerJobId)}/image-${params.position}.${extensionForContentType(normalizedContentType)}`
   await r2.client.send(
     new PutObjectCommand({
       Bucket: r2.bucket,

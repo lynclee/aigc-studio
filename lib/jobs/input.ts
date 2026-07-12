@@ -13,7 +13,7 @@ const ALLOWED_WORKFLOWS: Record<AigcKind, readonly string[]> = {
 export function sanitizeSubmitRequest(
   body: Record<string, unknown>,
   kind: AigcKind,
-  userOpenId: string,
+  userId: string,
 ): SubmitRequest {
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : ""
   if (prompt.length < 1) throw new JobInputError("prompt_required")
@@ -30,6 +30,6 @@ export function sanitizeSubmitRequest(
     prompt,
     workflowId: workflow,
     input: { workflow },
-    userOpenId,
+    userId,
   }
 }

@@ -14,7 +14,7 @@ export async function GET() {
   if (!session) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 })
 
   try {
-    const rows = await listOwnedJobs(session.open_id)
+    const rows = await listOwnedJobs(session.userId)
     const jobs = await Promise.all(
       rows.map(async (row) => {
         const reconciled = await reconcileJob(row)

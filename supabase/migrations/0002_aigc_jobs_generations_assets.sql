@@ -1,14 +1,13 @@
 -- Slim AIGC job/result schema.
 --
--- Identity model: user ownership is the Lark open_id stored by lib/session.ts.
--- This project does not use Supabase Auth for user APIs; route handlers use
--- service_role on the server and must owner-guard by user_open_id.
+-- Identity model: user ownership is the Supabase Auth user ID from lib/session.ts.
+-- Route handlers use service_role on the server and must owner-guard by user_id.
 --
 -- No credit/cost/refund accounting is represented here by design.
 
 create table if not exists public.aigc_jobs (
   id                uuid        primary key default gen_random_uuid(),
-  user_open_id      text        not null,
+  user_id           text        not null,
   kind              text        not null check (kind in ('image', 'model3d', 'video')),
   workflow_id       text        not null default 'standard',
   status            text        not null default 'queued'
@@ -53,10 +52,10 @@ begin
 end $$;
 
 create index if not exists aigc_jobs_user_created_idx
-  on public.aigc_jobs (user_open_id, created_at desc);
+  on public.aigc_jobs (user_id, created_at desc);
 
 create index if not exists aigc_jobs_user_status_idx
-  on public.aigc_jobs (user_open_id, status, created_at desc);
+  on public.aigc_jobs (user_id, status, created_at desc);
 
 create index if not exists aigc_jobs_active_reconcile_idx
   on public.aigc_jobs (status, updated_at)
@@ -77,7 +76,7 @@ create unique index if not exists aigc_jobs_provider_job_unique_idx
 create table if not exists public.aigc_generations (
   id              uuid        primary key default gen_random_uuid(),
   job_id          uuid        not null references public.aigc_jobs(id) on delete cascade,
-  user_open_id    text        not null,
+  user_id         text        not null,
   kind            text        not null check (kind in ('image', 'model3d', 'video')),
   workflow_id     text        not null default 'standard',
   prompt          text,
@@ -92,13 +91,13 @@ alter table public.aigc_generations
   add column if not exists workflow_id text not null default 'standard';
 
 create index if not exists aigc_generations_user_created_idx
-  on public.aigc_generations (user_open_id, created_at desc);
+  on public.aigc_generations (user_id, created_at desc);
 
 create table if not exists public.aigc_assets (
   id              uuid        primary key default gen_random_uuid(),
   generation_id   uuid        not null references public.aigc_generations(id) on delete cascade,
   job_id          uuid        not null references public.aigc_jobs(id) on delete cascade,
-  user_open_id    text        not null,
+  user_id         text        not null,
   kind            text        not null check (kind in ('image', 'model3d', 'video')),
   asset_type      text        not null default 'output',
   position        integer     not null default 0,
@@ -111,7 +110,7 @@ create table if not exists public.aigc_assets (
 );
 
 create index if not exists aigc_assets_user_created_idx
-  on public.aigc_assets (user_open_id, created_at desc);
+  on public.aigc_assets (user_id, created_at desc);
 
 create index if not exists aigc_assets_generation_idx
   on public.aigc_assets (generation_id, position);

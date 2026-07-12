@@ -5,7 +5,7 @@ export interface SubmitRequest {
   prompt: string
   workflowId: string
   input: Record<string, unknown>
-  userOpenId: string
+  userId: string
 }
 
 export interface ProviderSubmitResult {
@@ -34,7 +34,7 @@ export interface ProviderStatusResult {
 
 export interface AigcJobRecord {
   id: string
-  user_open_id: string
+  user_id: string
   kind: AigcKind
   workflow_id: string
   status: JobStatus
@@ -52,7 +52,7 @@ export interface AigcJobRecord {
 export interface AigcGenerationRecord {
   id: string
   job_id: string
-  user_open_id: string
+  user_id: string
   kind: AigcKind
   workflow_id: string
   prompt: string | null
@@ -66,7 +66,7 @@ export interface AigcAssetRecord {
   id: string
   generation_id: string
   job_id: string
-  user_open_id: string
+  user_id: string
   kind: AigcKind
   asset_type: string
   position: number

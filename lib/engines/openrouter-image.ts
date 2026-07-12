@@ -49,7 +49,7 @@ export async function submitOpenRouterImage(request: SubmitRequest): Promise<Pro
   )
   const stored = await persistImage({
     image: parseImage(response, config.outputFormat),
-    userOpenId: request.userOpenId,
+    userId: request.userId,
     model,
     response,
   })
@@ -180,13 +180,13 @@ function parseImage(
 
 async function persistImage(params: {
   image: { bytes: Buffer; contentType: string }
-  userOpenId: string
+  userId: string
   model: string
   response: Record<string, unknown>
 }): Promise<StoredOpenRouterImage> {
   const providerJobId = randomUUID()
   const asset = await storeImageBytesInR2({
-    userOpenId: params.userOpenId,
+    userId: params.userId,
     providerJobId,
     position: 0,
     bytes: params.image.bytes,

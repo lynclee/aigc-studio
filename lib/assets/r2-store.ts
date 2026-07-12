@@ -59,7 +59,7 @@ export interface StoredAsset extends ProviderOutputAsset {
 }
 
 export async function storeProviderAssetsInR2(params: {
-  userOpenId: string;
+  userId: string;
   jobId: string;
   kind: AigcKind;
   assets: ProviderOutputAsset[];
@@ -82,7 +82,7 @@ export async function storeProviderAssetsInR2(params: {
     const category = assetCategory(params.kind, asset.assetType);
     const downloaded = await downloadProviderAsset(url, category);
     const ext = extensionFor(downloaded.contentType, url.pathname);
-    const key = `${params.userOpenId}/${params.jobId}/${asset.assetType}-${asset.position}.${ext}`;
+    const key = `${params.userId}/${params.jobId}/${asset.assetType}-${asset.position}.${ext}`;
 
     try {
       await r2.client.send(

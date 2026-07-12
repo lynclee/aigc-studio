@@ -20,7 +20,7 @@ export async function handleCancelJob(jobId: string): Promise<NextResponse> {
   if (!session) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 })
 
   try {
-    const job = await getOwnedJob(jobId, session.open_id)
+    const job = await getOwnedJob(jobId, session.userId)
     if (!job) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 })
     if (terminalStatus(job.status)) {
       return NextResponse.json({ ok: false, error: "job_already_terminal", job: publicJob(job) }, { status: 409 })

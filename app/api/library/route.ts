@@ -12,7 +12,7 @@ export async function GET() {
   if (!session) return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 })
 
   try {
-    const { generations, assets } = await listUserLibrary(session.open_id)
+    const { generations, assets } = await listUserLibrary(session.userId)
     const assetsByGeneration = new Map<string, typeof assets>()
     for (const asset of assets) {
       const list = assetsByGeneration.get(asset.generation_id) ?? []

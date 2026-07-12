@@ -22,7 +22,7 @@ export type ReconcileResult = {
 export async function reconcileJob(job: AigcJobRecord): Promise<ReconcileResult> {
   if (terminalStatus(job.status)) {
     if (job.status === "succeeded") {
-      const { generation, assets } = await getGenerationForJob(job.id, job.user_open_id)
+      const { generation, assets } = await getGenerationForJob(job.id, job.user_id)
       return { job, generation, assets, changed: false }
     }
     return { job, generation: null, assets: [], changed: false }

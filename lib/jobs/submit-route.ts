@@ -14,9 +14,9 @@ export async function handleGeneratePost(req: Request, kind: AigcKind): Promise<
   try {
     ensureProviderConfigured(kind)
     const body = await parseJsonObject(req)
-    const request: SubmitRequest = sanitizeSubmitRequest(body, kind, session.open_id)
+    const request: SubmitRequest = sanitizeSubmitRequest(body, kind, session.userId)
     const job = await createQueuedJob({
-      userOpenId: session.open_id,
+      userId: session.userId,
       kind,
       provider: providerNameForKind(kind),
       request,

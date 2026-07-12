@@ -18,7 +18,7 @@ export async function GET(_req: Request, context: RouteContext) {
 
   try {
     const { id } = await context.params
-    let job = await getOwnedJob(id, session.open_id)
+    let job = await getOwnedJob(id, session.userId)
     if (!job) return NextResponse.json({ ok: false, error: "not_found" }, { status: 404 })
 
     const reconciled = await reconcileJob(job)

@@ -1,9 +1,8 @@
 /**
  * Supabase service_role 客户端(仅服务端)。
  *
- * 本项目不用 Supabase Auth —— 用飞书 OAuth + 自管 cookie session(见 lib/session.ts)。
- * 因此一律用 service_role 在服务端访问 Supabase,不依赖 RLS auth.uid()。
- * AIGC 读写经 route handler 按 user_open_id 做 owner guard。
+ * 登录态由 Supabase Auth cookie 提供；业务数据仍只在服务端用 service_role 读写。
+ * AIGC 读写经 route handler 按 user_id 做 owner guard，不依赖浏览器传入的用户标识。
  * 旧 gallery_items 表开了 RLS 但零 policy,只有 service_role(绕过 RLS)能读写。
  *
  * ⚠️ env 缺失返回 null(不抛),调用方据此降级到「作品库待配置」,避免 build / 占位 env 崩。
