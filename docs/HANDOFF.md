@@ -24,6 +24,7 @@
 | `lib/jobs/*` | 创建、限流、同步、保存任务与结果 |
 | `lib/engines/*` | Modal / OpenRouter / fal / ComfyUI provider |
 | `lib/assets/*` | R2 保存与输出文件安全检查 |
+| `docs/MODAL_COMFY_BACKEND_ARCHITECTURE.md` | Modal GPU / CPU、OpenRouter、fal 的后端目标与当前差距 |
 | `supabase/migrations/0001_*` | 历史兼容表，新定义使用 `user_id` |
 | `supabase/migrations/0002_*` | 当前 jobs / generations / assets 表 |
 | `supabase/migrations/0003_*` | 已有旧库的归属字段改名兼容迁移 |
