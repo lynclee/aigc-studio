@@ -1,4 +1,4 @@
-# AIGC Studio：本次改动与交叉验证交接说明
+# AIGC Studio：最新交接与交叉验证说明
 
 > 用途：把这份文件交给 Claude、GLM 或其他代码审查者，作为本轮改造的共同事实来源。先读本文件，再读 docs/HANDOFF.md 和相关源码；不要根据旧的“上传口令 / 手动上传作品”说明继续开发。
 >
@@ -6,9 +6,11 @@
 >
 > 参考工程：/workspace/v0_banana/v0-nano-banana-pro-playground
 >
-> 记录日期：2026-07-11
+> 记录日期：2026-07-11（已按本次 GitHub、Vercel Hobby 与飞书登录配置状态刷新）
 >
-> 飞书部署手册：[从零上线一个自己的 AIGC 作品网站：给设计师和美术同学的部署手册](https://my.feishu.cn/docx/X9JddcFVpoLuOxxJAHCcqiClnSe)（本轮更新后为 revision 127）
+> 飞书部署手册：[从零上线一个自己的 AIGC 作品网站：给设计师和美术同学的部署手册](https://my.feishu.cn/docx/X9JddcFVpoLuOxxJAHCcqiClnSe)（本轮更新后为 revision 137）
+
+> **当前线上状态（先读）**：代码已推送到私有 GitHub 仓库 `liqi155134/aigc-studio`；Vercel 项目 `liqi-s-projects/aigc-studio` 已连接 GitHub，最新 `main` 已完成 Production 和 Preview 构建。项目目前没有任何 Vercel 环境变量，且 Vercel Deployment Protection 会要求 Vercel SSO；所以“构建成功”不代表飞书登录、数据库、R2 或生成服务已经可用。
 
 ---
 
@@ -20,7 +22,7 @@
       → 图片 / 3D / 视频三张入口卡片
       → 选择预设工作流、填写 prompt
       → 云端服务后台生成
-      → 网站与 Vercel 定时任务持续检查状态
+      → 页面即时检查 + Vercel 每日兜底检查状态
       → 结果存到私有 R2
       → 用户在个人作品库查看、下载
 
@@ -257,7 +259,46 @@ fal endpoint 可以配置，但不同 fal 模型接受的字段、输出格式�
 
 图片 route 设置了较长 maxDuration，以兼容 OpenRouter 同步返回图片。其余 provider 主要按异步任务处理。
 
-## 10. 配置与部署
+## 10. 配置与部署：当前真实状态
+
+### 10.1 GitHub、Vercel 与 Cron
+
+- GitHub 私有仓库：`https://github.com/liqi155134/aigc-studio`。
+- 当前分支：`main`，已关联 `origin/main`；本次功能主提交是 `88974e5`，Hobby 兼容 Cron 提交是 `24a515b`。
+- Vercel 项目：`liqi-s-projects/aigc-studio`，框架识别为 Next.js，GitHub 仓库已经连接。
+- 最新 Git push 已触发 Production 部署，状态为 Ready；同时已创建一个 Ready 的 Preview 部署。不要把每次部署生成的随机 URL 写入飞书 OAuth 回调地址。
+- `vercel.json` 现在是 `30 3 * * *`：每天 `03:30` 执行一次 `/api/jobs/reconcile`。这是为了适配 Vercel Hobby；此前的每 5 分钟计划会被 Vercel 拒绝，构建甚至不会开始。
+- 页面打开时 `/api/jobs` 与单任务查询仍会即时检查。每日 Cron 只是用户关掉页面后的兜底，最多检查 50 条 active jobs；它不是实时队列系统。
+- 当前访问部署 URL 会被 Vercel SSO 重定向。这是 Deployment Protection，不是 Next.js 或飞书错误。外部飞书用户测试前，必须让 Production 地址可公开访问，或调整相应保护规则。
+
+### 10.2 飞书登录：现在尚未配置
+
+Vercel CLI 已确认该项目当前 **没有环境变量**。飞书登录要先完成以下配置：
+
+1. 在飞书开放平台创建或选择企业自建应用，取得 `App ID` 和 `App Secret`。
+2. 开通“获取用户基本信息”权限：`contact:user.base:readonly`；代码只使用 `open_id`、名称和头像。
+3. 在应用的“开发配置 → 安全设置 → 重定向 URL”登记下面格式的地址，并发布应用、给测试人员可用范围：
+
+       https://<稳定生产域名>/api/auth/lark/callback
+
+   测试阶段可用当前 main 分支稳定别名：
+
+       https://aigc-studio-git-main-liqi-s-projects.vercel.app/api/auth/lark/callback
+
+   更推荐先绑定自己的域名，再用自己的域名。不要使用带随机字符的单次部署 URL；飞书和 Vercel 中的回调地址必须逐字一致。
+4. 在 Vercel 的 Production 和 Preview 环境至少添加：
+
+       LARK_APP_ID
+       LARK_APP_SECRET
+       LARK_REDIRECT_URI
+       SESSION_SECRET
+
+   `SESSION_SECRET` 用 `openssl rand -hex 32` 生成。变量保存后重新部署。
+5. 打开首页点击飞书登录，预期路径是：网站 `/api/auth/lark/login` → 飞书授权页 → `/api/auth/lark/callback` → `/portal`。
+
+授权链接、state 校验、code 换 token、user_info 获取在 `lib/lark/oauth.ts` 与 `app/api/auth/lark/*` 中已经实现。飞书授权地址必须在开放平台安全设置中预先登记；授权回调会携带 `code` 和 `state`。参考：[飞书授权码说明](https://open.feishu.cn/document/authentication-management/access-token/obtain-oauth-code?lang=zh-CN)、[浏览器网页接入指南](https://open.feishu.cn/document/sso/web-application-end-user-consent/guide?lang=zh-CN)。
+
+常见问题：飞书报 20027 通常是权限没有开通、发布或 scope 不一致；网站返回 `oauth_failed` 时看 Vercel Runtime Logs；先跳到 Vercel 登录页则说明 Deployment Protection 还挡着外部回调。
 
 主要更新：.env.example、scripts/setup-env.sh、scripts/setup-r2-cors.mjs、vercel.json。
 
@@ -291,7 +332,7 @@ fal endpoint 可以配置，但不同 fal 模型接受的字段、输出格式�
 3. 确认 R2 私有 bucket、CORS、服务端凭据可用。
 4. 确认自建 ComfyUI 能被 Vercel 安全访问；Vercel 无法访问某个人本机或私有内网的 localhost / 内网地址。
 5. 配好飞书 OAuth 回调地址。
-6. 确认 Cron 读取 CRON_SECRET。
+6. 确认 Cron 读取 CRON_SECRET，并确认 `30 3 * * *` 保持为 Hobby 可用的每日兜底计划。
 7. 对图片、3D、视频各跑至少一条真实完整链路。
 
 ## 11. 文档工作
@@ -308,7 +349,7 @@ fal endpoint 可以配置，但不同 fal 模型接受的字段、输出格式�
 - 部署 / 运营同学：GitHub、Vercel、飞书 OAuth、Supabase、R2、云端服务、变量和检查。
 - 设计 / 美术使用同学：登录、选图片 / 3D / 视频入口、写 prompt、等云端生成、在个人作品库查看和下载。
 
-手册明确普通用户不用操作 ComfyUI，使用“云端服务器在后台生成”这一说法，并保留图示 / 截图插入位置。本轮特别修正：COMFY_ORG_API_KEY 是部署者账号里有 API 积分的密钥；收费节点从该账号扣费；服务端把它写入 extra_data.api_key_comfy_org，浏览器拿不到。
+手册明确普通用户不用操作 ComfyUI，使用“云端服务器在后台生成”这一说法，并保留图示 / 截图插入位置。本轮特别修正：COMFY_ORG_API_KEY 是部署者账号里有 API 积分的密钥；收费节点从该账号扣费；服务端把它写入 extra_data.api_key_comfy_org，浏览器拿不到。手册也已经同步改成 Vercel Hobby 的每日 `03:30` Cron，并说明页面打开时会即时检查任务。
 
 ## 12. 验证结果和验证边界
 
@@ -320,12 +361,16 @@ fal endpoint 可以配置，但不同 fal 模型接受的字段、输出格式�
 - bash -n scripts/setup-env.sh、node --check scripts/setup-r2-cors.mjs：通过。
 - provider 配置分发、旧任务按数据库 provider 检查、fal endpoint 覆盖、OpenRouter 请求/R2 落库、ComfyUI body 都做过本地 mock smoke check。
 - ComfyUI mock 的关键断言：请求自建服务 /prompt；body 有 extra_data.api_key_comfy_org；无 X-API-Key header；后续路径是 /history/:id 和 /view。
+- GitHub 私有仓库已创建并保留完整本地提交历史；`main` 已推送并连接 Vercel。
+- 第一次 Vercel Preview 因 `*/5 * * * *` 被 Hobby 计划拒绝；已改为 `30 3 * * *` 并推送。
+- 改动后的 Git 自动 Production 部署与手动 Preview 部署均为 Ready，说明 Vercel 安装、依赖安装和 Next.js 生产构建均通过。
 
 ### 12.2 尚未由本地 mock 证明
 
 - 没有使用真实生产密钥对 Modal、fal、OpenRouter、ComfyUI 做端到端生成。
 - 没有真实 GPT Image API workflow JSON，因此未证明内置两条模板会产生 GPT Image。
-- 未在最终 Vercel 域名、真实 Supabase、真实 R2、真实飞书 OAuth 上完成上线演练。
+- Vercel 项目尚无任何环境变量，因此还没有真实飞书 OAuth、Supabase、R2 或 provider 端到端演练。
+- 当前 Production / Preview URL 受 Vercel Deployment Protection 保护；未用外部普通用户完成访问测试。
 - 临时 smoke check 尚未整理成仓库内可持续运行的回归测试。
 
 所以不要把“构建通过”误读为“已商业上线”。真实部署和 provider E2E 仍是必须完成的下一阶段。
@@ -366,7 +411,7 @@ fal endpoint 可以配置，但不同 fal 模型接受的字段、输出格式�
 随后在测试环境：
 
 1. 执行 migration。
-2. 配置飞书、R2、Cron 和一个图片 provider。
+2. 先关闭或调整 Production Deployment Protection，再配置飞书、R2、Cron 和一个图片 provider。
 3. 用两个不同飞书账号各提交任务，确认互相看不到作品。
 4. 图片、3D、视频各提交一条，检查状态变化。
 5. 确认成功结果在 R2，且只由归属用户的 /api/library 返回。
@@ -378,12 +423,15 @@ fal endpoint 可以配置，但不同 fal 模型接受的字段、输出格式�
 | 事项 | 当前事实 | 推荐动作 |
 | --- | --- | --- |
 | GPT Image workflow | adapter 已正确传密钥，内置模板不是 GPT Image | 提供真实导出的 API JSON，再决定替换 standard、detail 或新增产品入口 |
+| Vercel 环境变量 | 当前为零；构建能通过但网站功能尚未配置 | 先按第 10.2 节完成飞书登录，再填 Supabase、R2 和 provider 变量 |
+| Vercel Deployment Protection | 当前外部请求会跳到 Vercel SSO，飞书回调无法给普通用户使用 | 测试前为 Production 调整保护规则；不要误判为网站 OAuth 错误 |
 | provider E2E | 尚无生产调用验证 | 每个准备上线的 provider 都跑真实任务、状态检查、R2 入库 |
 | fal 模型差异 | endpoint 可配置，不等于 payload 兼容 | 选定模型后加契约测试 / 专属 adapter |
 | 并发限流 | 现在是查询计数，极端并发可能越过阈值 | 用户量变大前改数据库原子限流/RPC |
 | ComfyUI 网络 | Vercel 要能访问自建服务 | 使用受控 HTTPS 域名或安全网关；不可填内网/localhost |
 | ComfyUI 取消 | 当前不支持，以免 interrupt 影响同机任务 | 若需要，先设计每任务隔离或安全队列取消 |
 | 旧人工导入作品 | 旧主流程已移除 | 真需要时另做有管理员权限和审计的后台 |
+| Hobby Cron 时效 | 页面关闭后每日只检查一次，且每次最多 50 条 | 试玩阶段可接受；正式交付时改用外部定时服务或升级计划 |
 | 可观测性 | Cron 有计数和有限失败样本，无完整告警 | 上线后添加失败告警和 provider 健康检查 |
 | 自动化测试 | mock smoke 尚未固化 | 把 provider、R2、所有权隔离写成可重复测试 |
 
@@ -414,4 +462,13 @@ fal endpoint 可以配置，但不同 fal 模型接受的字段、输出格式�
 3. 不把自建 ComfyUI 误接为 Comfy Cloud，也不要用 X-API-Key 代替 extra_data.api_key_comfy_org。
 4. 不把普通设计 / 美术用户拉回上传口令、target_open_id 或 ComfyUI 操作流程。
 5. 不为了通过构建而删除 R2 落库、所有权过滤、任务 provider 记录或 Cron。
-6. 当前工作区存在一批未提交改造文件；审查时只添加必要改动，不执行 reset、clean 或批量删除。
+6. 当前 `main` 已推送到 GitHub；审查时只添加必要改动，不执行 reset、clean 或批量删除。涉及 Vercel Production 配置、Deployment Protection、真实密钥或真实 provider 调用时，先确认外部影响再执行。
+
+## 17. 下一位执行者的最短顺序
+
+1. 打开 GitHub 仓库和本文件，确认 `main` 最新提交与 Vercel Production 都是 `24a515b` 之后的状态。
+2. 在 Vercel 处理 Production Deployment Protection，并准备一个稳定域名；不要把随机部署 URL 填进飞书。
+3. 按第 10.2 节创建 / 发布飞书自建应用，并先只配置四个飞书登录变量，验证登录能进入 `/portal`。
+4. 执行 Supabase migration，配置 R2；用两个飞书账号验证彼此隔离。
+5. 先选一个图片 provider（推荐先 OpenRouter 或现有 Modal），在测试环境完成“提交 → 状态 → R2 → 个人作品库”闭环，再接 3D、视频和 ComfyUI 付费节点。
+6. 每次 push 后检查 Vercel Deployment 是否 Ready；若任务只需试玩，保持每日 Cron。若要正式交付，先解决用户离线时的实时任务检查策略。
