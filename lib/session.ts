@@ -24,7 +24,7 @@ export async function getSession(): Promise<SessionPayload | null> {
 export async function clearSession(): Promise<void> {
   const client = await createSupabaseAuthClient()
   if (!client) return
-  await client.auth.signOut()
+  await client.auth.signOut({ scope: "local" })
 }
 
 function sessionFromUser(user: User): SessionPayload {

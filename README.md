@@ -86,7 +86,7 @@ Vercel Cron → 每天 03:30 检查未完成任务
 
 ### 3. 数据库、文件库与生成服务
 
-在 Supabase SQL Editor 依次执行：
+**新建数据库**在 Supabase SQL Editor 依次执行：
 
 ```text
 supabase/migrations/0001_gallery_items.sql
@@ -94,7 +94,7 @@ supabase/migrations/0002_aigc_jobs_generations_assets.sql
 supabase/migrations/0003_rename_legacy_user_columns.sql
 ```
 
-当前流程使用 `aigc_jobs`、`aigc_generations`、`aigc_assets` 三张表，以 Supabase 登录用户的 `user_id` 做作品归属。`0003` 仅帮助已有旧库把原来的归属字段改名；新项目执行后不会额外改变数据。
+当前流程使用 `aigc_jobs`、`aigc_generations`、`aigc_assets` 三张表，以 Supabase 登录用户的 `user_id` 做作品归属。`0003` 仅帮助已有旧库把原来的归属字段改名；新项目执行后不会额外改变数据。**已有旧版数据库不要重新执行 0001 或 0002**；先备份，只执行 `0003_rename_legacy_user_columns.sql`。
 
 Cloudflare R2 是正式作品库。生成服务返回的文件会先安全地存入 R2，再进入个人作品库。图片可选 Modal、OpenRouter、fal 或自建 ComfyUI；3D 与视频使用 fal。普通使用者不会看到、更不能选择这些服务。
 

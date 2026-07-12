@@ -116,6 +116,25 @@ const STATUS_CLASS: Record<JobStatus, string> = {
   cancelled: "border-neutral-400/20 bg-neutral-400/10 text-neutral-300",
 }
 
+const USER_ERROR_MESSAGES: Record<string, string> = {
+  unauthorized: "登录已失效，请重新登录",
+  missing_provider_env: "生成服务尚未配置，请联系部署同学",
+  invalid_provider_config: "生成服务配置有误，请联系部署同学",
+  backend_store_error: "任务服务暂时不可用，请稍后重试",
+  provider_http_error: "云端生成服务暂时不可用，请稍后重试",
+  provider_contract_error: "云端生成服务返回异常，请稍后重试",
+  invalid_provider_input: "提交内容不符合要求，请检查后重试",
+  prompt_required: "请先填写提示词",
+  prompt_too_long: "提示词过长，请精简后重试",
+  unsupported_workflow: "所选工作流暂不可用，请重新选择",
+  generation_failed: "本次生成失败，请调整描述后重试",
+  storage_failed: "作品保存失败，请稍后重试",
+  job_cancel_conflict: "任务状态刚刚变化，请刷新后重试",
+  unsupported_cancel: "当前任务不支持取消",
+  not_found: "没有找到这个任务",
+  internal_error: "服务暂时不可用，请稍后重试",
+}
+
 function normalizeStatus(value: unknown): JobStatus {
   const raw = String(value ?? "").toLowerCase()
   if (["queued", "pending", "created", "waiting"].includes(raw)) return "queued"
@@ -151,6 +170,13 @@ function firstString(record: RawRecord, keys: string[]): string | null {
     if (value) return value
   }
   return null
+}
+
+function userFacingError(value: unknown, fallback: string): string {
+  const raw = asString(value)
+  if (!raw) return fallback
+  if (/[一-鿿]/.test(raw)) return raw
+  return USER_ERROR_MESSAGES[raw] ?? fallback
 }
 
 function pickArray(payload: unknown): unknown[] {
@@ -436,7 +462,10 @@ function normalizeSubmittedJob(value: unknown, index: number): SubmittedJob | nu
     status: normalizeStatus(record.status),
     createdAt: firstString(record, ["createdAt", "created_at", "updatedAt", "updated_at"]) ?? new Date().toISOString(),
     resultUrl: getResultUrl(record),
-    error: firstString(record, ["error", "message"]),
+    error: (() => {
+      const rawError = firstString(record, ["error", "message"])
+      return rawError ? userFacingError(rawError, "任务暂时无法完成，请稍后重试") : null
+    })(),
   }
 }
 
@@ -466,6 +495,7 @@ export function PortalWorkbench({
     ) as Record<MediaType, { workflow: string; prompt: string }>,
   )
   const [submitting, setSubmitting] = useState<MediaType | null>(null)
+  const [cancellingJobId, setCancellingJobId] = useState<string | null>(null)
   const [jobs, setJobs] = useState<SubmittedJob[]>([])
   const [library, setLibrary] = useState<LibraryItem[]>([])
   const [libraryLoading, setLibraryLoading] = useState(true)
@@ -486,7 +516,7 @@ export function PortalWorkbench({
       setLibrary(normalizeLibraryItems(payload))
     } catch (error) {
       setLibrary([])
-      setLibraryError(error instanceof Error ? error.message : "作品库暂时无法读取")
+      setLibraryError(userFacingError(error instanceof Error ? error.message : null, "作品库暂时无法读取"))
     } finally {
       setLibraryLoading(false)
     }
@@ -530,7 +560,10 @@ export function PortalWorkbench({
                       ...item,
                       status: nextStatus,
                       resultUrl: getResultUrl(payload) ?? item.resultUrl,
-                      error: firstString(record ?? {}, ["error", "message"]) ?? item.error,
+                      error: userFacingError(
+                        firstString(record ?? {}, ["error", "message"]),
+                        item.error ?? "任务状态暂时无法读取",
+                      ),
                     }
                   : item,
               ),
@@ -542,7 +575,7 @@ export function PortalWorkbench({
                 item.id === job.id
                   ? {
                       ...item,
-                      error: error instanceof Error ? error.message : "状态查询失败",
+                      error: userFacingError(error instanceof Error ? error.message : null, "状态查询失败"),
                     }
                   : item,
               ),
@@ -570,7 +603,7 @@ export function PortalWorkbench({
       const payload = await readJsonSafely(response)
       if (!response.ok) {
         const message = firstString(asRecord(payload) ?? {}, ["error", "message"])
-        throw new Error(message ?? `提交失败（${response.status}）`)
+        throw new Error(userFacingError(message, `提交失败（${response.status}）`))
       }
       const jobId = getJobId(payload)
       if (!jobId) throw new Error("提交成功但没有返回任务 ID")
@@ -601,12 +634,50 @@ export function PortalWorkbench({
           workflow: form.workflow,
           status: "failed",
           createdAt: new Date().toISOString(),
-          error: error instanceof Error ? error.message : "提交失败",
+          error: userFacingError(error instanceof Error ? error.message : null, "提交失败"),
         },
         ...current,
       ])
     } finally {
       setSubmitting(null)
+    }
+  }
+
+  async function cancelJob(job: SubmittedJob) {
+    if (!isActiveJob(job) || job.id.startsWith("local-")) return
+
+    setCancellingJobId(job.id)
+    try {
+      const response = await fetch(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, {
+        method: "POST",
+        cache: "no-store",
+      })
+      const payload = await readJsonSafely(response)
+      if (!response.ok) {
+        const message = firstString(asRecord(payload) ?? {}, ["error", "message"])
+        throw new Error(userFacingError(message, "取消失败，请稍后重试"))
+      }
+
+      const record = asRecord(payload)
+      const cancelled = asRecord(record?.job) ?? record
+      const status = normalizeStatus(cancelled?.status)
+      setJobs((current) =>
+        current.map((item) =>
+          item.id === job.id
+            ? { ...item, status, error: status === "cancelled" ? null : item.error }
+            : item,
+        ),
+      )
+    } catch (error) {
+      setJobs((current) =>
+        current.map((item) =>
+          item.id === job.id
+            ? { ...item, error: userFacingError(error instanceof Error ? error.message : null, "取消失败，请稍后重试") }
+            : item,
+        ),
+      )
+    } finally {
+      setCancellingJobId(null)
     }
   }
 
@@ -636,7 +707,7 @@ export function PortalWorkbench({
                 </div>
               )}
               <span className="hidden text-sm text-neutral-200 sm:inline">
-                {userName || "飞书用户"}
+                {userName || "创作同学"}
               </span>
             </div>
             <form action="/api/auth/logout" method="post">
@@ -687,7 +758,7 @@ export function PortalWorkbench({
         </section>
 
         <section className="mt-10 grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.6fr)]">
-          <JobPanel jobs={jobs} />
+          <JobPanel jobs={jobs} cancellingJobId={cancellingJobId} onCancel={(job) => void cancelJob(job)} />
           <LibraryPanel
             items={library}
             loading={libraryLoading}
@@ -770,7 +841,15 @@ function EntryCard({
   )
 }
 
-function JobPanel({ jobs }: { jobs: SubmittedJob[] }) {
+function JobPanel({
+  jobs,
+  cancellingJobId,
+  onCancel,
+}: {
+  jobs: SubmittedJob[]
+  cancellingJobId: string | null
+  onCancel: (job: SubmittedJob) => void
+}) {
   return (
     <section className="rounded-3xl border border-white/10 bg-neutral-900/70 p-5">
       <div className="mb-4 flex items-center justify-between">
@@ -798,6 +877,16 @@ function JobPanel({ jobs }: { jobs: SubmittedJob[] }) {
                 <span className="truncate">#{job.id}</span>
               </div>
               {job.error && <p className="mt-2 text-xs text-red-300">{job.error}</p>}
+              {isActiveJob(job) && !job.id.startsWith("local-") && (
+                <button
+                  type="button"
+                  onClick={() => onCancel(job)}
+                  disabled={cancellingJobId === job.id}
+                  className="mt-3 inline-flex text-xs text-neutral-400 transition hover:text-white disabled:cursor-not-allowed disabled:text-neutral-600"
+                >
+                  {cancellingJobId === job.id ? "正在取消…" : "取消任务"}
+                </button>
+              )}
               {job.resultUrl && (
                 <a
                   href={job.resultUrl}

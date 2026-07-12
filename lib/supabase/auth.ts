@@ -12,16 +12,25 @@ export async function createSupabaseAuthClient() {
       getAll() {
         return cookieStore.getAll()
       },
-      setAll(values) {
-        for (const { name, value, options } of values) {
-          cookieStore.set(name, value, options)
+      setAll(values, _headers) {
+        try {
+          for (const { name, value, options } of values) {
+            cookieStore.set(name, value, options)
+          }
+        } catch {
+          // Server Components cannot write cookies. proxy.ts refreshes tokens
+          // before rendering and writes the refreshed values to the response.
         }
       },
     },
   })
 }
 
-export function appOrigin(request: Request): string {
+/**
+ * OAuth redirects must use a stable, allowlisted production origin. Local
+ * development may use the request origin; production must set NEXT_PUBLIC_SITE_URL.
+ */
+export function appOrigin(request: Request): string | null {
   const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim()
   if (configured) {
     try {
@@ -32,5 +41,19 @@ export function appOrigin(request: Request): string {
     }
   }
 
+  const requestOrigin = new URL(request.url).origin
+  return isLocalOrigin(requestOrigin) ? requestOrigin : null
+}
+
+export function requestOrigin(request: Request): string {
   return new URL(request.url).origin
+}
+
+function isLocalOrigin(origin: string): boolean {
+  try {
+    const hostname = new URL(origin).hostname
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
+  } catch {
+    return false
+  }
 }

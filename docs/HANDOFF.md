@@ -34,7 +34,7 @@
 1. Supabase → Authentication → Providers 中启用 GitHub 与 Google，填 Client ID / Secret。
 2. GitHub 与 Google OAuth 应用的回调都填写：`https://<project-ref>.supabase.co/auth/v1/callback`。
 3. Supabase URL Configuration 设置 Site URL，并把 `https://你的域名/api/auth/callback` 加入 Redirect URLs；本地再加 `http://localhost:3000/api/auth/callback`。
-4. 在 Supabase SQL Editor 按顺序执行 `0001`、`0002`、`0003` 三份迁移。
+4. 新建 Supabase 项目时，在 SQL Editor 按顺序执行 `0001`、`0002`、`0003` 三份迁移。已有旧版数据库先备份，**只执行 `0003`，不要重跑 `0001` 或 `0002`**。
 5. Vercel 填好基础环境变量：
 
 ```text

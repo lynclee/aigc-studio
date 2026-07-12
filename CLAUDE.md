@@ -46,8 +46,8 @@ GitHub 登录（优先）/ Google-Gmail 登录
 
 ## 认证与数据归属
 
-- 登录使用 **Supabase Auth**。GitHub 是页面第一入口，Google / Gmail 是备用入口；两者不会自动合并或自动切换。
-- 服务端 `getSession()` 通过 Supabase Auth cookie 的 `getUser()` 验证身份。所有权只信当前会话的 `userId`，绝不信浏览器传来的用户 ID。
+- 登录使用 **Supabase Auth**。GitHub 是页面第一入口，Google / Gmail 是备用入口；两者不会自动合并或自动切换。根目录 `proxy.ts` 会在页面渲染前刷新 cookie；不要删除它，也不要改用已废弃的 `middleware.ts`。
+- 服务端 `getSession()` 通过 Supabase Auth cookie 的 `getUser()` 验证身份。所有权只信当前会话的 `userId`，绝不信浏览器传来的用户 ID。登出只退出当前设备会话。
 - 数据表用 `user_id` 保存归属。已有旧数据库时执行 `0003_rename_legacy_user_columns.sql`。
 - 业务读写仍在服务端使用 `SUPABASE_SERVICE_ROLE_KEY`；不要给浏览器直连业务表的权限。RLS 保持开启且不添加 anon / authenticated policy。
 

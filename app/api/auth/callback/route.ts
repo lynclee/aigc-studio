@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server"
-import { appOrigin, createSupabaseAuthClient } from "@/lib/supabase/auth"
+import { appOrigin, createSupabaseAuthClient, requestOrigin } from "@/lib/supabase/auth"
 
 export async function GET(request: Request) {
-  const origin = appOrigin(request)
+  const origin = appOrigin(request) ?? requestOrigin(request)
   const code = new URL(request.url).searchParams.get("code")
   if (!code) return NextResponse.redirect(new URL("/?error=oauth_failed", origin))
 

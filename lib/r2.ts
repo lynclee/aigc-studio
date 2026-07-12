@@ -5,7 +5,7 @@
  * `https://<account_id>.r2.cloudflarestorage.com`,region 固定 "auto"。
  *
  * 生成完成后,服务端会将提供商产物保存进私有 R2 bucket。个人作品库只持有
- * r2_key,展示时用 `signGetUrl` 现签一个 S3 预签名 GET URL(默认 7 天有效)。
+ * r2_key,展示时用 `signGetUrl` 现签一个 S3 预签名 GET URL(默认 1 小时有效)。
  *
  * ⚠️ env 缺失时优雅降级:`getR2Client` 返回 null、`signGetUrl` 返回 null,
  * **绝不在模块加载期抛错** —— 这些只在运行时(请求处理中)被调用,
@@ -59,12 +59,12 @@ export function getR2Client(): { client: S3Client; bucket: string } | null {
 /**
  * 对一个 R2 对象 key 签一个预签名 GET URL。
  * @param key R2 对象 key(不含 bucket)
- * @param expiresInSeconds 有效期秒数,默认 7 天
+ * @param expiresInSeconds 有效期秒数,默认 1 小时
  * @returns 预签名 URL;env 缺失或签名失败返回 null(调用方渲染占位)
  */
 export async function signGetUrl(
   key: string,
-  expiresInSeconds = 604800,
+  expiresInSeconds = 60 * 60,
 ): Promise<string | null> {
   const r2 = getR2Client()
   if (!r2) return null

@@ -61,7 +61,7 @@ Vercel Cron（每天 03:30）
 
 - `0001_gallery_items.sql` 是历史兼容表。
 - `0002_aigc_jobs_generations_assets.sql` 是当前主表。
-- `0003_rename_legacy_user_columns.sql` 让已执行早期迁移的数据库把旧归属列改为 `user_id`；新数据库可安全执行它。
+- `0003_rename_legacy_user_columns.sql` 让已执行早期迁移的数据库把旧归属列改为 `user_id`；新数据库可安全执行它。已有旧库只运行 `0003`，不要手动重跑改写后的 `0001` / `0002`。
 - 业务读写用服务端 `SUPABASE_SERVICE_ROLE_KEY`，RLS 保持开启但没有浏览器直接访问 policy。
 
 ### 3.3 Provider 和结果保存

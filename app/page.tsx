@@ -33,6 +33,7 @@ function GoogleIcon({ className }: { className?: string }) {
 const ERROR_MESSAGES: Record<string, string> = {
   oauth_failed: "登录失败,请重试",
   auth_unconfigured: "登录服务尚未配置,请联系部署同学",
+  site_url_required: "网站地址尚未完成配置,请联系部署同学",
 }
 
 export default async function HomePage({
