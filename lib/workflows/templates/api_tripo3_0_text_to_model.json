@@ -1,0 +1,31 @@
+{
+  "3": {
+    "inputs": {
+      "prompt": "{{PROMPT}}",
+      "negative_prompt": "",
+      "model_version": "v3.0-20250812",
+      "style": "None",
+      "texture": true,
+      "pbr": true,
+      "image_seed": "{{SEED}}",
+      "model_seed": "{{SEED}}",
+      "texture_seed": "{{SEED}}",
+      "texture_quality": "standard",
+      "face_limit": -1,
+      "quad": false,
+      "geometry_quality": "standard"
+    },
+    "class_type": "TripoTextToModelNode",
+    "_meta": { "title": "Tripo: Text to Model" }
+  },
+  "31": {
+    "inputs": { "model_file": ["3", 0], "image": "" },
+    "class_type": "Preview3D",
+    "_meta": { "title": "Preview 3D" }
+  },
+  "32": {
+    "inputs": { "filename_prefix": "3d/ComfyUI", "image": "", "mesh": ["3", 2] },
+    "class_type": "SaveGLB",
+    "_meta": { "title": "Save GLB" }
+  }
+}

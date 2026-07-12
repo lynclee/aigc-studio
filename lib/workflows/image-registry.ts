@@ -1,17 +1,26 @@
 import { firstString, isRecord } from "@/lib/aigc/http"
 import { renderTemplate } from "@/lib/workflows/render-template"
 import zImageTurboTemplate from "@/lib/workflows/templates/z_image_turbo.json"
+import zImageTurboI2iTemplate from "@/lib/workflows/templates/z_image_turbo_i2i.json"
 import flux2KleinTemplate from "@/lib/workflows/templates/flux2_klein.json"
 
 export type ImageWorkflowId = "z_image_turbo" | "flux2_klein"
 
 type ModalGpu = "L40S" | "A100" | "A100-40GB" | "A100-80GB" | "H100" | string
 
+// modal-bridge 交付用:是否需要 GPU + 档位(cpu/cheap/primary/top)。普通用户不可覆盖。
+// 无法判定的一律 needs_gpu=true / primary(稳但略贵)。
+type GpuClass = "cpu" | "cheap" | "primary" | "top"
+
 type ImageWorkflowConfig = {
   id: ImageWorkflowId
   aliases: string[]
   gpu?: ModalGpu
+  needsGpu?: boolean
+  gpuClass?: GpuClass
   template: unknown
+  // 有参考图时用的图生图变体(同一模型 + 核心节点 LoadImage/VAEEncode)。没有则该工作流不支持图生图。
+  i2iTemplate?: unknown
 }
 
 type RenderImageWorkflowParams = {
@@ -23,23 +32,31 @@ export type RenderedImageWorkflow = {
   id: ImageWorkflowId
   workflow: Record<string, unknown>
   gpu?: ModalGpu
+  needsGpu?: boolean
+  gpuClass?: GpuClass
   width: number
   height: number
   seed: number
 }
 
 const DEFAULT_SIZE = 1024
+const DEFAULT_DENOISE = 0.7 // 图生图去噪强度:越低越贴近参考图,越高越自由;部署同学可按模型调
 const SEED_MAX = 0x100000000
 
 const WORKFLOWS: ImageWorkflowConfig[] = [
   {
     id: "z_image_turbo",
     aliases: ["standard", "fast", "z_image_turbo"],
+    needsGpu: true,
+    gpuClass: "primary",
     template: zImageTurboTemplate,
+    i2iTemplate: zImageTurboI2iTemplate,
   },
   {
     id: "flux2_klein",
     aliases: ["detail", "detailed", "quality", "flux2_klein"],
+    needsGpu: true,
+    gpuClass: "primary",
     template: flux2KleinTemplate,
   },
 ]
@@ -50,17 +67,31 @@ export function renderImageWorkflow(params: RenderImageWorkflowParams): Rendered
   const config = resolveImageWorkflow(params.input)
   const { width, height } = dimensionsFromInput(params.input)
   const seed = seedFromInput(params.input)
-  const rendered = renderTemplate(config.template, {
+  const referenceName = firstReferenceName(params.input)
+  // 有参考图且该工作流有 i2i 变体 → 走图生图(LoadImage→VAEEncode);否则文生图。
+  const template = config.i2iTemplate && referenceName ? config.i2iTemplate : config.template
+  const rendered = renderTemplate(template, {
     PROMPT: params.prompt,
     WIDTH: width,
     HEIGHT: height,
     SEED: seed,
+    REFERENCE_IMAGE: referenceName ?? "",
+    DENOISE: DEFAULT_DENOISE,
   })
   const workflow = isRecord(rendered) && isRecord(rendered.input) && isRecord(rendered.input.workflow)
     ? rendered.input.workflow
     : null
   if (!workflow) throw new Error(`image workflow '${config.id}' template missing input.workflow after render`)
-  return { id: config.id, workflow, gpu: config.gpu, width, height, seed }
+  return {
+    id: config.id,
+    workflow,
+    gpu: config.gpu,
+    needsGpu: config.needsGpu,
+    gpuClass: config.gpuClass,
+    width,
+    height,
+    seed,
+  }
 }
 
 function resolveImageWorkflow(input: Record<string, unknown>): ImageWorkflowConfig {
@@ -72,6 +103,14 @@ function resolveImageWorkflow(input: Record<string, unknown>): ImageWorkflowConf
     throw new ImageWorkflowInputError(`unsupported image workflow '${requested}'. Supported workflows: ${supported}`)
   }
   return config
+}
+
+function firstReferenceName(input: Record<string, unknown>): string | undefined {
+  const images = input.images
+  if (Array.isArray(images) && images.length > 0 && isRecord(images[0]) && typeof images[0].name === "string") {
+    return images[0].name
+  }
+  return undefined
 }
 
 function seedFromInput(input: Record<string, unknown>): number {
@@ -107,7 +146,8 @@ function positiveInt(value: unknown): number | undefined {
 }
 
 function round64(value: number): number {
-  return Math.max(64, Math.round(value / 64) * 64)
+  // 上钳 4096:兜底任何来源(含 aspectRatio 推导)的尺寸,不让它绕过 input.ts 的上限放大显存。
+  return Math.min(4096, Math.max(64, Math.round(value / 64) * 64))
 }
 
 export class ImageWorkflowInputError extends Error {

@@ -1,0 +1,100 @@
+{
+  "1": {
+    "inputs": {
+      "model_version": "v3.0-20250812",
+      "style": "person:person2cartoon",
+      "texture": true,
+      "pbr": true,
+      "model_seed": 42,
+      "orientation": "default",
+      "texture_seed": 42,
+      "texture_quality": "detailed",
+      "texture_alignment": "geometry",
+      "face_limit": -1,
+      "quad": false,
+      "geometry_quality": "standard",
+      "image": [
+        "19",
+        0
+      ]
+    },
+    "class_type": "TripoImageToModelNode",
+    "_meta": {
+      "title": "Tripo：图像转模型"
+    }
+  },
+  "2": {
+    "inputs": {
+      "image": "3d_character_front_view.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "3": {
+    "inputs": {
+      "image": "3d_character_back_view.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "4": {
+    "inputs": {
+      "image": "3d_character_left_view.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "12": {
+    "inputs": {
+      "model_file": [
+        "1",
+        0
+      ],
+      "image": ""
+    },
+    "class_type": "Preview3D",
+    "_meta": {
+      "title": "预览3D"
+    }
+  },
+  "13": {
+    "inputs": {
+      "filename_prefix": "3d/tripo_image2model",
+      "image": "",
+      "mesh": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "SaveGLB",
+    "_meta": {
+      "title": "保存GLB"
+    }
+  },
+  "19": {
+    "inputs": {
+      "images.image0": [
+        "2",
+        0
+      ],
+      "images.image1": [
+        "4",
+        0
+      ],
+      "images.image2": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "BatchImagesNode",
+    "_meta": {
+      "title": "批量图像"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "1": {
+    "inputs": {
+      "model": "Seedance 2.0 Mini",
+      "model.prompt": "{{PROMPT}}",
+      "model.resolution": "720p",
+      "model.ratio": "16:9",
+      "model.duration": 5,
+      "model.generate_audio": true,
+      "seed": "{{SEED}}",
+      "watermark": false
+    },
+    "class_type": "ByteDance2TextToVideoNode",
+    "_meta": { "title": "ByteDance Seedance 2.0 Text to Video" }
+  },
+  "2": {
+    "inputs": {
+      "filename_prefix": "video/Seedance2.0_mini",
+      "format": "auto",
+      "codec": "auto",
+      "video": ["1", 0]
+    },
+    "class_type": "SaveVideo",
+    "_meta": { "title": "Save Video" }
+  }
+}
