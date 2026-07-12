@@ -36,7 +36,7 @@ GitHub 登录（优先）/ Google-Gmail 登录
   │    → /api/auth/callback
   └─ /portal 创作工作台
        ├─ 图片 → 部署者选定的图片服务
-       ├─ 3D / 视频 → fal.ai
+       ├─ 3D / 视频 → fal 或 Modal Bridge（部署者选）
        ├─ 任务状态 → Supabase
        └─ 个人作品库 → Cloudflare R2
 
@@ -74,13 +74,16 @@ Vercel Cron → 每天 03:30 检查未完成任务
 | `SUPABASE_SERVICE_ROLE_KEY` | 仅服务端访问任务与作品表的密钥 |
 | `CRON_SECRET` | 每天后台检查任务的专用口令 |
 | `R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET` | Cloudflare R2 私有作品库 |
-| `AIGC_IMAGE_PROVIDER` | 图片服务开关：`modal` / `openrouter` / `fal` / `comfyui` |
-| `MODAL_ENDPOINT_BASE` / `MODAL_KEY` / `MODAL_SECRET` | 图片服务选择 Modal 时填写 |
+| `AIGC_IMAGE_PROVIDER` | 图片服务开关：`modal-bridge` / `modal` / `openrouter` / `fal` / `comfyui` |
+| `AIGC_VIDEO_PROVIDER` / `AIGC_MODEL3D_PROVIDER` | 视频 / 3D 服务开关：`fal`（默认）或 `modal-bridge` |
+| `MODAL_BRIDGE_ENDPOINT_BASE` / `MODAL_BRIDGE_API_KEY` / `BRIDGE_DELIVERY_TOKEN_SECRET` | 选 `modal-bridge` 时填写（comfyui_modal_bridge 的 aigc-r2 交付）|
+| `VERCEL_AUTOMATION_BYPASS_SECRET` | 可选；生产域名开 Deployment Protection 时,让 Bridge 回调内部 endpoint |
+| `MODAL_ENDPOINT_BASE` / `MODAL_KEY` / `MODAL_SECRET` | 遗留 `modal` 图片服务时填写 |
 | `OPENROUTER_API_KEY` / `OPENROUTER_IMAGE_MODEL` | 图片服务选择 OpenRouter 时填写 |
-| `FAL_KEY` | 3D、视频必填；图片服务选择 fal 时也使用 |
+| `FAL_KEY` | 视频/3D 默认后端;图片服务选择 fal 时也使用 |
 | `FAL_IMAGE_ENDPOINT` | 图片服务选择 fal 时填写 endpoint 路径 |
 | `COMFYUI_BASE_URL` | 图片服务选择自建 ComfyUI 时填写服务地址 |
-| `COMFY_ORG_API_KEY` | 仅工作流包含 GPT Image 等 ComfyUI 付费节点时填写；只在服务端传给 ComfyUI |
+| `COMFY_ORG_API_KEY` | 工作流含 ComfyUI 付费 API 节点时填写；只在服务端传给 ComfyUI（Bridge 侧对应 Modal Secret 的 `COMFY_API_KEY_COMFY_ORG`）|
 
 `AIGC_IMAGE_PROVIDER` 是部署者的快速切换开关。当前推荐顺序是 **OpenRouter → fal**，但它不是自动备用：切换后要重新部署，并保留旧服务的配置直到旧任务全部结束。
 
@@ -92,9 +95,11 @@ Vercel Cron → 每天 03:30 检查未完成任务
 supabase/migrations/0001_gallery_items.sql
 supabase/migrations/0002_aigc_jobs_generations_assets.sql
 supabase/migrations/0003_rename_legacy_user_columns.sql
+supabase/migrations/0004_aigc_job_uploads.sql
+supabase/migrations/0005_finalize_job_assets.sql
 ```
 
-当前流程使用 `aigc_jobs`、`aigc_generations`、`aigc_assets` 三张表，以 Supabase 登录用户的 `user_id` 做作品归属。`0003` 仅帮助已有旧库把原来的归属字段改名；新项目执行后不会额外改变数据。**已有旧版数据库不要重新执行 0001 或 0002**；先备份，只执行 `0003_rename_legacy_user_columns.sql`。
+当前流程使用 `aigc_jobs`、`aigc_generations`、`aigc_assets` 三张表，以 Supabase 登录用户的 `user_id` 做作品归属;`0004` 增加 `aigc_job_uploads`(Modal Bridge aigc-r2 交付的在途上传台账 + 孤儿清理)。`0003` 仅帮助已有旧库把原来的归属字段改名；新项目执行后不会额外改变数据。**已有旧版数据库不要重新执行 0001 或 0002**；先备份，只执行 `0003_rename_legacy_user_columns.sql`。
 
 Cloudflare R2 是正式作品库。生成服务返回的文件会先安全地存入 R2，再进入个人作品库。图片可选 Modal、OpenRouter、fal 或自建 ComfyUI；3D 与视频使用 fal。普通使用者不会看到、更不能选择这些服务。
 

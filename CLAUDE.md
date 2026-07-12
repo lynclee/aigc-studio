@@ -12,6 +12,7 @@
 npm run dev
 npm run build
 npm run typecheck
+npm run test    # vitest:token/asset-policy/input 等纯逻辑单测
 npm run start
 ```
 
@@ -39,9 +40,10 @@ GitHub 登录（优先）/ Google-Gmail 登录
 | `/api/auth/callback` | 交换 Supabase OAuth code，写入登录会话 |
 | `/api/auth/logout` | 退出 Supabase 会话 |
 | `/api/generate/image` | 部署者选定的图片服务 |
-| `/api/generate/model3d` / `/api/generate/video` | fal.ai 3D / 视频服务 |
+| `/api/generate/model3d` / `/api/generate/video` | 部署者选定的 3D / 视频服务（fal 或 modal-bridge）|
+| `/api/internal/asset-intake` / `/api/internal/job-complete` | aigc-r2 内部 endpoint，供 Modal Bridge 回调；**机器对机器，不走 getSession**，认 `delivery_token` + `x-vercel-protection-bypass` |
 | `/api/jobs` / `/api/jobs/[id]` | 当前用户任务、状态同步与取消 |
-| `/api/jobs/reconcile` | Vercel Cron 后台检查，需要 `CRON_SECRET` |
+| `/api/jobs/reconcile` | Vercel Cron 后台检查 + R2 孤儿清理，需要 `CRON_SECRET` |
 | `/api/library` | 当前用户个人作品库 |
 
 ## 认证与数据归属
@@ -55,11 +57,12 @@ GitHub 登录（优先）/ Google-Gmail 登录
 
 | 类型 | provider | 配置 |
 |---|---|---|
-| 图片 | `modal-image` / `openrouter-image` / `fal-image` / `comfyui-image` | `AIGC_IMAGE_PROVIDER` 选择 |
-| 3D | `fal-model3d` | `FAL_KEY`，可覆盖 endpoint |
-| 视频 | `fal-video` | `FAL_KEY`，可覆盖 endpoint |
+| 图片 | `modal-bridge` / `modal-image` / `openrouter-image` / `fal-image` / `comfyui-image` | `AIGC_IMAGE_PROVIDER` 选择 |
+| 3D | `modal-bridge` / `fal-model3d` | `AIGC_MODEL3D_PROVIDER`（默认 fal）|
+| 视频 | `modal-bridge` / `fal-video` | `AIGC_VIDEO_PROVIDER`（默认 fal）|
 
-- 图片 provider 由部署者选择，用户不能选择。OpenRouter 在 fal 前是部署建议，不是自动 fallback。
+- provider 由部署者选择，用户不能选择。优先级 Modal → OpenRouter → fal，是部署建议而非自动 fallback。
+- **`modal-bridge`**：通过 `comfyui_modal_bridge` 插件的 aigc-r2 交付模式，图片/视频/3D 通用。Worker 直传 R2、push 回调落库;R2 长期 key 只在 Vercel。视频/3D 工作流(seedance/tripo 等)在 `lib/workflows/registry.ts` 注册;API 节点款跑 CPU worker、需 Modal Secret 里的 `COMFY_API_KEY_COMFY_ORG`。`modal-image` 是遗留自研 worker,仅兼容旧任务。
 - ComfyUI 接入的是自建服务的 `/prompt`、`/history/:id`、`/view`。若 API 工作流使用 GPT Image 等付费节点，`COMFY_ORG_API_KEY` 只在服务端随 `/prompt` 的 `extra_data.api_key_comfy_org` 传给 ComfyUI，不会进入浏览器。
 - 任务检查要按已存的 `aigc_jobs.provider` 分发；切换图片服务后，保留旧服务配置直到旧任务全部结束。
 - 只有结果成功保存到私有 R2、写入 `aigc_assets` 后，任务才能标为完成。不要把 provider 临时链接当最终作品。
@@ -82,7 +85,10 @@ R2_BUCKET
 FAL_KEY
 ```
 
-图片服务按选择补充：Modal 用 `MODAL_*`；OpenRouter 用 `OPENROUTER_API_KEY` 和 `OPENROUTER_IMAGE_MODEL`；fal 用 `FAL_IMAGE_ENDPOINT`；自建 ComfyUI 用 `COMFYUI_BASE_URL`，付费节点再加 `COMFY_ORG_API_KEY`。完整清单见 `.env.example`。
+provider 按选择补充:
+- Modal Bridge(`modal-bridge`,含视频/3D):`MODAL_BRIDGE_ENDPOINT_BASE`、`MODAL_BRIDGE_API_KEY`、`BRIDGE_DELIVERY_TOKEN_SECRET`;生产域名开 Deployment Protection 时加 `VERCEL_AUTOMATION_BYPASS_SECRET`。视频/3D 走 Bridge 再设 `AIGC_VIDEO_PROVIDER` / `AIGC_MODEL3D_PROVIDER=modal-bridge`。
+- 旧 Modal 用 `MODAL_*`;OpenRouter 用 `OPENROUTER_API_KEY` 和 `OPENROUTER_IMAGE_MODEL`;fal 用 `FAL_IMAGE_ENDPOINT`;自建 ComfyUI 用 `COMFYUI_BASE_URL`,付费节点再加 `COMFY_ORG_API_KEY`。
+- R2 长期 key 只在 Vercel;Modal Secret 侧只放 `BRIDGE_API_KEY` + (API 节点)`COMFY_API_KEY_COMFY_ORG`,绝不含 R2 密钥。完整清单见 `.env.example`。
 
 Supabase 后台必须配置 GitHub 和 Google provider：两个第三方 OAuth 应用的回调地址都是 `https://<project-ref>.supabase.co/auth/v1/callback`；Supabase 的 Site URL / Redirect URLs 要包含网站的 `/api/auth/callback`。
 
@@ -94,10 +100,11 @@ Supabase 后台必须配置 GitHub 和 Google provider：两个第三方 OAuth �
 4. R2 私有，浏览器只取短期签名链接。
 5. 任务完成必须以 R2 保存成功为准。
 6. provider 输出 URL 继续执行 HTTPS、允许域名、DNS、大小检查。
+7. aigc-r2 内部 endpoint（asset-intake / job-complete）不走 getSession，只认 `delivery_token`（HMAC 绑 job）+ protection-bypass；R2 长期 key 只在 Vercel，Bridge 只拿短期预签名 PUT，且 r2_key 路径由服务端生成、核验只信 R2 实际 size+ETag。
 
 ## 工作流程
 
-- 文档改动同步 README、`docs/HANDOFF.md`、`docs/AIGC_STUDIO_CROSS_REVIEW_HANDOFF.md` 和用户指定的在线部署手册。
+- 文档改动同步 README、`docs/HANDOFF.md`（现状入口）、`docs/PLUGIN_MODAL_BRIDGE_CHANGE_PLAN.md`（插件契约）和用户指定的在线部署手册。docs/ 精简为三份:HANDOFF、PLATFORM_OVERVIEW、PLUGIN_MODAL_BRIDGE_CHANGE_PLAN。
 - 截图、验收图片统一在 `/workspace/documents/screenshot`。
 - 代码改动至少跑 `npm run typecheck`；重要改动跑 `npm run build`。
 - UI 改动后在 1920×1080 与 1080×1920 各验证一次。
