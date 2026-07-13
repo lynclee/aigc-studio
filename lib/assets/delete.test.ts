@@ -11,6 +11,7 @@ vi.mock("@/lib/assets/r2-store", () => ({ storeProviderAssetsInR2: vi.fn() }))
 import {
   assetKeyBelongsToRecord,
   deletionKeysForAsset,
+  getAssetDeleteBacklog,
   processPendingAssetDeletes,
   tombstoneGenerationAssets,
 } from "@/lib/assets/delete"
@@ -32,7 +33,7 @@ describe("asset deletion queue", () => {
     authority = authorityRow()
     deleteObjectMock.mockResolvedValue(true)
     from.mockImplementation((table: string) => tableQuery(table, () => referenceCount, () => authority))
-    rpc.mockImplementation(async (name: string, params: Record<string, unknown>) => {
+    rpc.mockImplementation(async (name: string, params: Record<string, unknown> = {}) => {
       if (name === "deadletter_expired_asset_deletes") return { data: deadlettered, error: null }
       if (name === "claim_pending_asset_deletes") return { data: claimed, error: null }
       if (name === "complete_asset_delete") {
@@ -127,6 +128,46 @@ describe("asset deletion queue", () => {
     const result = await processPendingAssetDeletes(10)
     expect(rpc).toHaveBeenCalledWith("deadletter_expired_asset_deletes", { p_limit: 10 })
     expect(result).toMatchObject({ scanned: 0, deadlettered: 2, exhausted: 0 })
+  })
+
+  it("loads aggregate-only deletion backlog counters", async () => {
+    rpc.mockResolvedValueOnce({
+      data: {
+        observed_at: "2026-07-13T00:00:00.000Z",
+        pending_total: 4,
+        pending_due: 2,
+        pending_leased: 1,
+        retry_wait: 1,
+        deadletter_due: 0,
+        error_total: 3,
+        oldest_pending_at: "2026-07-12T00:00:00.000Z",
+        oldest_error_at: "2026-07-11T00:00:00.000Z",
+      },
+      error: null,
+    })
+    await expect(getAssetDeleteBacklog()).resolves.toEqual({
+      observedAt: "2026-07-13T00:00:00.000Z",
+      pendingTotal: 4,
+      pendingDue: 2,
+      pendingLeased: 1,
+      retryWait: 1,
+      deadletterDue: 0,
+      errorTotal: 3,
+      oldestPendingAt: "2026-07-12T00:00:00.000Z",
+      oldestErrorAt: "2026-07-11T00:00:00.000Z",
+    })
+    expect(rpc).toHaveBeenCalledWith("asset_delete_backlog_counts")
+  })
+
+  it.each([
+    backlogData({ pending_total: -1 }),
+    backlogData({ pending_total: 1, pending_due: 1, pending_leased: 1, oldest_pending_at: "2026-07-12T00:00:00.000Z" }),
+    backlogData({ pending_total: 1, pending_due: 1, oldest_pending_at: null }),
+    backlogData({ observed_at: "not-a-date" }),
+    backlogData({ error_total: 1, oldest_error_at: null }),
+  ])("fails closed on malformed deletion backlog data", async (data) => {
+    rpc.mockResolvedValueOnce({ data, error: null })
+    await expect(getAssetDeleteBacklog()).rejects.toThrow("malformed data")
   })
 
   it("isolates one R2 failure and continues the rest of the claimed batch", async () => {
@@ -263,6 +304,21 @@ function authorityRow() {
     provider_job_id: "provider-1",
     deleted_at: "2026-07-13T00:00:00.000Z",
     aigc_jobs: { user_id: "user-1" },
+  }
+}
+
+function backlogData(overrides: Record<string, unknown> = {}) {
+  return {
+    observed_at: "2026-07-13T00:00:00.000Z",
+    pending_total: 0,
+    pending_due: 0,
+    pending_leased: 0,
+    retry_wait: 0,
+    deadletter_due: 0,
+    error_total: 0,
+    oldest_pending_at: null,
+    oldest_error_at: null,
+    ...overrides,
   }
 }
 

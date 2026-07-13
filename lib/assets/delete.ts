@@ -27,6 +27,18 @@ export interface AssetDeleteCleanupResult {
   conflicted: number
 }
 
+export interface AssetDeleteBacklog {
+  observedAt: string
+  pendingTotal: number
+  pendingDue: number
+  pendingLeased: number
+  retryWait: number
+  deadletterDue: number
+  errorTotal: number
+  oldestPendingAt: string | null
+  oldestErrorAt: string | null
+}
+
 type ClaimedAsset = AigcAssetRecord & {
   r2_key: string
   delete_claim_token: string
@@ -76,6 +88,48 @@ export async function processPendingAssetDeletes(
   }
 
   return totals
+}
+
+/** Aggregate-only operations signal; never exposes identities, keys, or errors. */
+export async function getAssetDeleteBacklog(): Promise<AssetDeleteBacklog> {
+  const admin = requireAigcAdmin()
+  const { data, error } = await admin.rpc("asset_delete_backlog_counts")
+  if (error) throw new BackendStoreError(`load asset deletion backlog failed: ${error.message}`)
+  if (
+    !isRecord(data)
+    || typeof data.observed_at !== "string"
+    || !Number.isFinite(Date.parse(data.observed_at))
+    || !isNonNegativeInteger(data.pending_total)
+    || !isNonNegativeInteger(data.pending_due)
+    || !isNonNegativeInteger(data.pending_leased)
+    || !isNonNegativeInteger(data.retry_wait)
+    || !isNonNegativeInteger(data.deadletter_due)
+    || !isNonNegativeInteger(data.error_total)
+    || (data.oldest_pending_at !== null && typeof data.oldest_pending_at !== "string")
+    || (data.oldest_error_at !== null && typeof data.oldest_error_at !== "string")
+    || (typeof data.oldest_pending_at === "string" && !Number.isFinite(Date.parse(data.oldest_pending_at)))
+    || (typeof data.oldest_error_at === "string" && !Number.isFinite(Date.parse(data.oldest_error_at)))
+    || (data.pending_total > 0 && !data.oldest_pending_at)
+    || (data.pending_total === 0 && data.oldest_pending_at !== null)
+    || (data.error_total > 0 && !data.oldest_error_at)
+    || (data.error_total === 0 && data.oldest_error_at !== null)
+    || data.pending_due > data.pending_total
+    || data.pending_leased > data.pending_total
+    || data.pending_due + data.pending_leased + data.retry_wait + data.deadletter_due !== data.pending_total
+  ) {
+    throw new BackendStoreError("load asset deletion backlog returned malformed data")
+  }
+  return {
+    observedAt: data.observed_at,
+    pendingTotal: data.pending_total,
+    pendingDue: data.pending_due,
+    pendingLeased: data.pending_leased,
+    retryWait: data.retry_wait,
+    deadletterDue: data.deadletter_due,
+    errorTotal: data.error_total,
+    oldestPendingAt: data.oldest_pending_at,
+    oldestErrorAt: data.oldest_error_at,
+  }
 }
 
 async function deadletterExpiredAssetDeletes(limit: number): Promise<number> {

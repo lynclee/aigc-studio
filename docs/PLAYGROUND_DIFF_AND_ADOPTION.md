@@ -23,7 +23,7 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 - `WorkflowDefinition` 代码内目录：公共元数据、provider-effective input schema、执行变体、参考图能力、模板版本、输出契约成为 UI/API/renderer/adapter/交付核验共同数据源。
 - 输出完整性统一覆盖 aigc-r2 与 URL/direct provider；video/model preview 按 image 类别核验，作品库按 output contract 选择主资产与预览。
 - 浏览器只接收 public catalog；generation/API 错误不再暴露 provider/variant/env 名。
-- 资产删除后端闭环：owner-only DELETE、单事务 Generation tombstone + Asset queue、跨用户活引用闸门、claim lease/token fence、5 次有界重试与 dead-letter。
+- 资产删除后端闭环：owner-only DELETE、单事务 Generation tombstone + Asset queue、跨用户活引用闸门、claim lease/token fence、5 次有界重试与 dead-letter；`0010` 再补 aggregate backlog、ops-only 单项重驱动和不可变审计，普通用户重复 DELETE 不会复活死信。
 
 当前定位是**带不可变 Job snapshot 的高质量 Phase 1 代码内 Catalog**，不是最终平台级“加一条数据即可上线”。仍未落地：input R2 staging、按 workflow 路由引擎、通用 parameters/bindings、DB/UGC 工作流目录。
 
@@ -62,24 +62,25 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 - `lib/assets/delete.ts` 删除每个资产的 final + delivery staging sibling；preview/其它 provider 输出本身是独立 Asset 行，会单独入队。任何其他用户/作品的 active row 仍引用相同 key 时，逻辑删除当前行但保留共享物理对象。
 - `app/api/library/[id]/route.ts` 只接受 session owner；Library 与 Job 结果查询只认未 tombstone Generation + active Asset，serializer 也不会为非 active 资产签新 URL。
 - 独立 `/api/assets/cleanup` 与 reconcile 每日错峰；独立 route 在 45 秒预算内最多 drain 4×25 条，reconcile 最前面再保留一批兜底，以兼容项目既定 Vercel Hobby 目标。单项失败不阻断批次，错误只落稳定码，不保存/返回 R2 key 或原始异常。
+- `0010_asset_delete_operations.sql` 把死信处置限定为 service-role：只允许已调查的单行 `error → pending_delete`，重新校验 tombstone/owner/key namespace，attempts 归零但写一条不可变审计；Cron/SQL 监控只给 pending/due/leased/error 聚合数。没有用户重驱动 API，避免“再次点删除”无限刷新失败预算。
 
 **成本**:中(1 migration + 1 repository + 1 route + cron 扩展)。**价值**:填补功能缺口 + 合规。
 
-### 1.2 DB trigger 状态机约束 ⭐ 高价值低成本的共识是"aigc-studio 状态机缺 DB 层兜底
+### 1.2 DB Job 状态转换约束
 
-**aigc-studio 缺口**(Grep 确认):无任何 DB trigger(`grep trigger supabase` 无匹配)。状态转换全靠 application 层(`claimJobForReconcile` 的 `.in("status",...)` + `finalize_job_assets` RPC fence)。若 application 有 bug 或绕过(直接 SQL),无 DB 兜底。
+**当前状态:**项目已经有三类 DB 级防线：`0007-0008` 冻结并强制 workflow snapshot，`0009` 用 CHECK + claim/token RPC fence 约束资产删除状态，`0010` 用 append-only trigger 保护重驱动审计。但 **Job `status` 合法转换白名单**仍由 application CAS + `finalize_job_assets` RPC fence 维护；尚无 `enforce_job_state_transition` trigger。这里是 defense-in-depth 待办，不再是资产删除或 workflow revision 的上线阻塞项。
 
 **playground 参考**:
 - `supabase/migrations/20260608182124_establish_jobs_authority.sql`:`enforce_job_state_transition` trigger + 合法转换白名单(如 `cancelled->running` 非法)
 - `supabase/migrations/20260608194100_freeze_jobs_authoritative_fields.sql`:冻结 authoritative 字段(provider_job_id 等)防 application 误改
 - `lib/jobs/repository.ts:134-170` `transitionJob`:CAS `.in("status", fromStatuses)` + `requireNoCancelRequest`(`.is("cancel_requested_at", null)`)
 
-**移植建议**:
+**后续建议**:
 - 加 migration:在 `aigc_jobs` 上建 `enforce_job_state_transition` trigger,白名单合法转换(queued->running->succeeded/failed/cancelled,running->cancelled)
 - aigc-studio 的 5 状态比 playground 7 状态简单,trigger 更小
 - **与现有 finalize_job_assets RPC fence 互补**:RPC fence 防"租约过期落库",trigger 防"非法状态转换"。两者正交。
 
-**成本**:低(一个 trigger migration)。**价值**:DB 层最后防线,防 application bug/绕过。
+**成本**:低(一个 trigger migration)，但必须先以真实 provider/取消/reconcile 轨迹锁定转换白名单，避免 trigger 误伤恢复路径。**价值**:DB 层最后防线，防 application bug/直接 SQL 绕过。
 
 ### 1.3 输入真实性校验 + 参考图 R2 staging
 
@@ -213,7 +214,7 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 |---|---|---|
 | `lib/assets/repository.ts` | tombstone + pending_delete + upsert_owned_asset | `lib/assets/delete.ts` + `app/api/library/[id]/route.ts` |
 | `supabase/migrations/20260610180000_atomic_asset_ownership_rpc.sql` | upsert_owned_asset 原子 RPC | ✅ 参考 owner/invariant 理念实现 `0009_aigc_asset_deletion.sql`，未复制其通用资产表 |
-| `supabase/migrations/20260608182124_establish_jobs_authority.sql` | enforce_job_state_transition trigger | aigc-studio 后续 `0010` migration(拟) |
+| `supabase/migrations/20260608182124_establish_jobs_authority.sql` | enforce_job_state_transition trigger | aigc-studio 后续独立 migration（未排号，当前 `0010` 已用于删除运维） |
 | `lib/generation-kernel/workflow-contract.ts` | workflow 契约 + capability | ✅ `lib/workflows/definitions.ts` + `output-contract.ts` |
 | `lib/image-engine/engine-client.ts` + `types.ts` | EngineClient interface + NormalizedStatus | `lib/engines/engine-client.ts`(新建) |
 | `components/image-combiner/hooks/use-persistent-history.tsx` | 3 层历史 | `components/library/use-persistent-library.tsx`(新建) |

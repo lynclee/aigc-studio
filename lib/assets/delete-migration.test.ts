@@ -37,4 +37,11 @@ describe("0009 asset deletion database contract", () => {
       expect(sql).toMatch(new RegExp(`grant execute on function public\\.${signature} to service_role`))
     }
   })
+
+  it("never lets a repeated user tombstone reset a dead letter", () => {
+    const tombstoneFunction = sql.match(/create or replace function public\.tombstone_generation_assets[\s\S]*?\$\$;/)?.[0]
+    expect(tombstoneFunction).toBeTruthy()
+    expect(tombstoneFunction).toMatch(/set state = 'pending_delete'[\s\S]*state = 'active'/)
+    expect(tombstoneFunction).not.toMatch(/state = 'error'[\s\S]*set state = 'pending_delete'/)
+  })
 })

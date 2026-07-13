@@ -68,17 +68,17 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 | `lib/workflows/revision.ts` | Job 级不可变 workflow snapshot：固定 definition revision、provider execution、模板版本与输出契约；仅双空旧任务临时回退当前 Catalog |
 | `lib/workflows/validate-template.ts` / `output-contract.ts` | 启动期模板完整性校验 / 所有 provider 共用的产物集合完整性校验 |
 | `lib/assets/r2-store.ts` / `lib/r2.ts` | R2 落库(URL 下载 + 字节直存)/ 预签名 GET·PUT / HeadObject / delete |
-| `supabase/migrations/0001-0009` | 0002 主表;0004 上传台账;0005 原子落库 RPC;0006 租约 fencing + RPC 权限升级;0007 workflow revision/snapshot 一致性与冻结;0008 强制新 Job 携带 snapshot;0009 Generation tombstone + Asset 删除队列/fence |
+| `supabase/migrations/0001-0010` | 0002 主表;0004 上传台账;0005 原子落库 RPC;0006 租约 fencing + RPC 权限升级;0007 workflow revision/snapshot 一致性与冻结;0008 强制新 Job 携带 snapshot;0009 Generation tombstone + Asset 删除队列/fence;0010 ops-only 死信重驱动、不可变审计与聚合 backlog |
 
 ## 数据模型
 
 `aigc_jobs`(提交+provider 状态)→ `aigc_generations`(一次结果,`deleted_at` 为用户删除 tombstone)→ `aigc_assets`(文件,`unique(job_id,asset_type,position)`,`active → pending_delete → deleted/error`)。
-`aigc_job_uploads`:aigc-r2 在途上传台账,幂等 + 孤儿清理用。四表全开 RLS、无 policy(仅 service_role)。
+`aigc_job_uploads`:aigc-r2 在途上传台账,幂等 + 孤儿清理用。`aigc_asset_delete_redrive_events`:只追加的运维重驱动审计，不存 R2 key、原始异常或凭据。所有表开 RLS、无浏览器 policy；服务端只用 service_role，审计表对 service_role 也只开放直读，写入只能经受限 RPC。
 
 ## 部署同学必须完成
 
 1. Supabase → Authentication → Providers 启用 GitHub 与 Google,填 Client ID/Secret;两者回调都填 `https://<project-ref>.supabase.co/auth/v1/callback`;Site URL / Redirect URLs 含网站 `/api/auth/callback`(本地加 localhost)。
-2. 全新环境在 SQL Editor 顺序执行 `0001`→`0009`。已有旧库先备份；workflow snapshot 的滚动升级顺序必须是：执行 `0007`(旧/新代码均可读写)→部署 snapshot new-write 版本→执行 `0008`。升级到当前资产删除版本时，**先执行 `0009`，再部署读取 `deleted_at/state` 的应用代码**。即使已经执行过旧版 `0005`，也必须执行 `0006` 以应用租约 fencing 与 RPC 权限加固。
+2. 全新环境在 SQL Editor 顺序执行 `0001`→`0010`。已有旧库先备份并只补未执行的 migration；详细顺序、数据审计和 canary 见下方「发布门禁」。即使已执行过旧版 `0005`，也必须执行 `0006` 以应用租约 fencing 与 RPC 权限加固。
 3. Vercel 环境变量(完整见 `.env.example`):
    - 基础:`NEXT_PUBLIC_SITE_URL`、两个 Supabase key、`SUPABASE_SERVICE_ROLE_KEY`、`CRON_SECRET`、`R2_*`、`FAL_KEY`。
    - 图片 provider 按选择:Modal Bridge 用 `MODAL_BRIDGE_*` + `BRIDGE_DELIVERY_TOKEN_SECRET`(+ 生产域名有 Deployment Protection 时 `VERCEL_AUTOMATION_BYPASS_SECRET`);其它见 `.env.example`。
@@ -87,13 +87,79 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 5. 若 Vercel 开 Deployment Protection,确认 OAuth 回调 + 内部 endpoint 可达(内部 endpoint 走 Protection Bypass for Automation)。
 6. 本项目默认兼容 Vercel Hobby，因此两个 Cron 都保持每日一次并错峰；若生产删除 SLA 要求短于 24 小时，升级套餐或使用可控外部 scheduler，以同样的 `Authorization: Bearer $CRON_SECRET` 更频繁调用 `/api/assets/cleanup`。
 
+### 发布门禁（部署同学必须逐项完成）
+
+1. **迁移顺序不可颠倒。** 全新库执行 `0001→0010`。从旧版滚动升级 workflow snapshot 时必须 `0007` → 部署会写 snapshot 的版本 → `0008`；资产删除版本必须 `0009` → `0010` → 再部署会过滤 `deleted_at/state`、调用 `asset_delete_backlog_counts()` 的当前应用。不要在旧代码仍写无 snapshot Job 时提前执行 `0008`。
+2. **首次提升 workflow revision 前排空 legacy active Job。** 运行 `select count(*) from public.aigc_jobs where status in ('queued','running') and workflow_snapshot is null;`，结果必须为 `0`；否则先 reconcile/终止，不让旧任务被新 Catalog 语义解释。
+3. **审生产 R2 key 权威格式。** 发布删除 worker 前按下方查询分类，`unknown` 必须为 `0`；同时确认旧 OpenRouter Generation 的 `provider_job_id` 不缺失。无法归类的历史资产先迁移/豁免评审，不能靠放宽删除前缀解决。
+4. **评估 `0009/0010` 锁窗口。** 先看 `aigc_assets` 估算行数和总大小；小表直接维护窗口执行。`0010` 的 version CHECK 已使用 `NOT VALID → VALIDATE`，但 error partial index 仍会扫描现有表。大表需另做经 review 的 `CREATE INDEX CONCURRENTLY` 分阶段迁移，不能临时改已发布 migration 或在业务高峰硬跑。
+5. **确认 Cron 配额和鉴权。** `vercel.json` 当前恰好两条每日 Cron（03:30 reconcile、04:00 cleanup）；部署前确认套餐仍允许，勿直接增加第三条。缺失/错误 `CRON_SECRET` 必须 401 且 cleanup/backlog 零调用，正确鉴权响应只能含聚合计数。
+
+R2 key 分类审计（只输出类别与数量，不导出 key）：
+
+```sql
+with keyed as (
+  select asset.r2_key,
+         asset.user_id,
+         asset.job_id::text as job_id,
+         generation.provider,
+         generation.provider_job_id,
+         coalesce(nullif(left(regexp_replace(asset.user_id, '[^A-Za-z0-9_-]', '_', 'g'), 160), ''), 'item') as user_segment,
+         coalesce(nullif(left(regexp_replace(asset.job_id::text, '[^A-Za-z0-9_-]', '_', 'g'), 160), ''), 'item') as job_segment,
+         coalesce(nullif(left(regexp_replace(generation.provider_job_id, '[^A-Za-z0-9_-]', '_', 'g'), 160), ''), 'item') as provider_segment
+    from public.aigc_assets asset
+    join public.aigc_generations generation on generation.id = asset.generation_id
+   where asset.r2_key is not null and btrim(asset.r2_key) <> ''
+), classified as (
+  select case
+    when left(r2_key, char_length('aigc/' || user_id || '/' || job_id || '/')) = 'aigc/' || user_id || '/' || job_id || '/' then 'current_aigc'
+    when left(r2_key, char_length(user_segment || '/' || job_segment || '/')) = user_segment || '/' || job_segment || '/' then 'current_direct'
+    when provider_job_id is not null and left(r2_key, char_length(user_segment || '/' || provider_segment || '/')) = user_segment || '/' || provider_segment || '/' then 'legacy_provider_job'
+    else 'unknown'
+  end as key_format
+  from keyed
+)
+select key_format, count(*) from classified group by key_format order by key_format;
+
+select count(*) as legacy_openrouter_without_provider_job_id
+from public.aigc_generations
+where provider like 'openrouter%' and provider_job_id is null;
+
+select reltuples::bigint as estimated_rows,
+       pg_size_pretty(pg_total_relation_size('public.aigc_assets')) as total_size
+from pg_class where oid = 'public.aigc_assets'::regclass;
+```
+
+### 资产删除死信监控与重驱动 Runbook
+
+- 每次 cleanup 后响应包含 `pendingTotal/pendingDue/pendingLeased/retryWait/deadletterDue/errorTotal` 与最老时间；也可在 SQL Editor 执行 `select public.asset_delete_backlog_counts();`。`error_total > 0` 或 pending 连续两天不下降即告警。
+- 先检查稳定 `delete_error`、R2 凭据/权限、跨用户活引用与 key 分类。**不要**把 R2 key、原始异常、密钥写进 actor/reason 或工单公开字段。
+- 只有已 tombstone、owner/job/generation 一致、key 属于当前或受控 legacy namespace 的 `error` 资产能重驱动；普通用户重复 DELETE 不会重置死信。
+- 修复根因后由 service-role 运维身份执行一次：
+
+```sql
+select id, delete_redrive_version, delete_attempts, delete_error
+from public.aigc_assets
+where id = '<asset-uuid>'::uuid and state = 'error';
+
+select public.redrive_asset_delete(
+  '<asset-uuid>'::uuid,
+  0, -- 替换为上一步刚读到的 delete_redrive_version
+  'ops.alice',
+  'r2_access_restored'
+);
+```
+
+  调用前从同一资产读取当前 `delete_redrive_version`，把它作为 CAS 版本传入；旧命令重放或并发操作者只能有一个成功。`actor` 只允许可归责标识，`reason` 只允许小写稳定码。成功必须返回 `requeued=true`、资产变 `pending_delete/attempts=0`，version 加一，且 `aigc_asset_delete_redrive_events` 恰好新增一条；下一轮 cleanup 应使 pending 下降。若返回 `requeued=false`、RPC 拒绝、或资产再次进入 `error`，立即停止盲目重置并重新调查。
+- 生产启用前做一次 canary：合法 tombstone+error 行应成功；未 tombstone、owner 不一致、越权 key 三组应全部拒绝且不写审计。实测 anon/authenticated 调 backlog/redrive 均 permission denied，service_role 成功；真实 PostgreSQL 两连接并发重驱动只允许一条审计。
+
 ## 当前状态(诚实)
 
-- **已完成 + 独立 review + test/typecheck/build 通过**:aigc-r2 全链路、input 参数透传、图生图、视频/3D 与多参考图工作流。Batch1 新增 PNG/JPEG/WebP/GIF signature/MIME 校验、两阶段大小预检、7 模板启动期完整性校验、模板变量非递归替换。Batch2 新增 Phase 1 `WorkflowDefinition` Catalog：Portal 工作流列表/现有参数控件、API allowlist/schema、provider execution/reference、template version、aigc-r2 与 URL/direct provider 输出核验共同消费同一目录；Fal/OpenRouter effective schema 不再展示/接受会被忽略的参数；所有 provider 都拒绝 preview-only 完成；浏览器 public catalog/API/generation 不暴露 provider/variant/env。Batch3 已实现不可变 workflow revision/job snapshot。Batch4 已实现资产删除后端闭环：`DELETE /api/library/[id]` 只信 session owner；`0009` 在单事务中 tombstone Generation 并队列全部 Asset；所有公开读取立即过滤删除项；独立错峰 Cron 用 `FOR UPDATE SKIP LOCKED` + lease/token fence 删除 final/staging，跨用户活引用会阻止物理误删；失败按 30/60/120/240 秒退避，最多 5 次后进入有界统计的 `error` 死信。
+- **已完成 + 独立 review + test/typecheck/build 通过**:aigc-r2 全链路、input 参数透传、图生图、视频/3D 与多参考图工作流。Batch1 新增 PNG/JPEG/WebP/GIF signature/MIME 校验、两阶段大小预检、7 模板启动期完整性校验、模板变量非递归替换。Batch2 新增 Phase 1 `WorkflowDefinition` Catalog：Portal 工作流列表/现有参数控件、API allowlist/schema、provider execution/reference、template version、aigc-r2 与 URL/direct provider 输出核验共同消费同一目录；Fal/OpenRouter effective schema 不再展示/接受会被忽略的参数；所有 provider 都拒绝 preview-only 完成；浏览器 public catalog/API/generation 不暴露 provider/variant/env。Batch3 已实现不可变 workflow revision/job snapshot。Batch4 已实现资产删除后端闭环：`DELETE /api/library/[id]` 只信 session owner；`0009` 在单事务中 tombstone Generation 并队列全部 Asset；所有公开读取立即过滤删除项；独立错峰 Cron 用 `FOR UPDATE SKIP LOCKED` + lease/token fence 删除 final/staging，跨用户活引用会阻止物理误删；失败按 30/60/120/240 秒退避，最多 5 次后进入 `error` 死信。`0010` 增加 ops-only 单行重驱动、不可变/无敏感数据审计和 aggregate backlog；没有普通用户重驱动 route。
 - **待部署同学真跑一次**:**任一引擎端到端从未真跑过**。需配好 env + R2 + Modal Secret,跑一次文生图/视频/3D E2E。工作流模板(`z_image_turbo_i2i`、seedance t2v/r2v、tripo t2model/i2model)也需在真 ComfyUI 各验证一次(此环境跑不了 ComfyUI/Modal)。当前明确拒绝 Seedance 1~3 张和 Tripo 1~2 张欠槽输入;逐数量真机验证后才能放宽能力矩阵。
 - **待做**:参考图先直传 job-scoped R2 staging(当前 inline data-uri 有 3MiB 合计保护)、OpenRouter Video adapter、视频/3D 的分辨率·时长·质量 UI 控件。Catalog 下一阶段做按 workflow 路由 provider 与通用 `parameters[] + binding`；当前仍是代码注册式 Phase 1，不应宣称已达到 DB/UGC 的“只加数据不发版”。
 
-删除语义:RPC 提交后 Library/Job 结果立即不再返回或新签名该作品；物理 R2 删除是最终一致的，Hobby 默认调度下通常在下一次错峰 Cron（最长约 24 小时）处理。此前已发放的 GET 预签名 URL 最长仍可使用约 1 小时，但对象被 Cron 提前删除后会立即失效。`error` 资产不会被重复 DELETE 重置重试次数，需运维显式处置/重入队。
+删除语义:RPC 提交后 Library/Job 结果立即不再返回或新签名该作品；物理 R2 删除是最终一致的，Hobby 默认调度下通常在下一次错峰 Cron（最长约 24 小时）处理。此前已发放的 GET 预签名 URL 最长仍可使用约 1 小时，但对象被 Cron 提前删除后会立即失效。`error` 资产不会被重复 DELETE 重置重试次数；必须先修根因，再按上方 Runbook 通过 ops-only RPC 单项重驱动并保留审计。
 
 Workflow snapshot 只冻结在途任务的**执行身份与交付契约**；MIME、大小、鉴权、归属、租约等全局安全策略继续使用部署时最新规则。`workflow_revision` 与 `workflow_snapshot` 同时为空的迁移前旧任务会临时回退当前 Catalog；首次提升任一 definition revision 前，应先让这批 active legacy jobs 完成或终止，避免旧任务被新目录语义解释。
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import {
+  getAssetDeleteBacklog,
   processPendingAssetDeletes,
   type AssetDeleteCleanupResult,
 } from "@/lib/assets/delete"
@@ -30,7 +31,11 @@ export async function GET(req: Request) {
       batches += 1
       if (batch.scanned < BATCH_SIZE && batch.deadlettered < BATCH_SIZE) break
     }
-    return NextResponse.json({ ok: true, batches, assetDeleteCleanup })
+    const assetDeleteBacklog = await getAssetDeleteBacklog()
+    if (assetDeleteBacklog.errorTotal > 0) {
+      console.error("asset delete dead letters present", { errorTotal: assetDeleteBacklog.errorTotal })
+    }
+    return NextResponse.json({ ok: true, batches, assetDeleteCleanup, assetDeleteBacklog })
   } catch (error) {
     console.error("asset delete cleanup cron error", {
       type: error instanceof Error ? error.name : typeof error,
