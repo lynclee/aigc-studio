@@ -23,6 +23,7 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 - `WorkflowDefinition` 代码内目录：公共元数据、provider-effective input schema、执行变体、参考图能力、模板版本、输出契约成为 UI/API/renderer/adapter/交付核验共同数据源。
 - 输出完整性统一覆盖 aigc-r2 与 URL/direct provider；video/model preview 按 image 类别核验，作品库按 output contract 选择主资产与预览。
 - 浏览器只接收 public catalog；generation/API 错误不再暴露 provider/variant/env 名。
+- 资产删除后端闭环：owner-only DELETE、单事务 Generation tombstone + Asset queue、跨用户活引用闸门、claim lease/token fence、5 次有界重试与 dead-letter。
 
 当前定位是**带不可变 Job snapshot 的高质量 Phase 1 代码内 Catalog**，不是最终平台级“加一条数据即可上线”。仍未落地：input R2 staging、按 workflow 路由引擎、通用 parameters/bindings、DB/UGC 工作流目录。
 
@@ -32,7 +33,7 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 |---|---|---|
 | 产物交付 | **aigc-r2 直传**(Bridge 直传 R2 + push 回调,主线) | provider 返回 URL -> Vercel 下载 -> 存 R2(旧模式) |
 | 状态机 | application 层(claimJobForReconcile + finalize_job_assets RPC fence + lease_until) | **CAS + DB trigger**(`transitionJob` with `fromStatuses` + `enforce_job_state_transition`) |
-| 资产生命周期 | 只有孤儿清理(cleanup),**无用户删除** | **tombstone + pending_delete 队列 + 异步重试** |
+| 资产生命周期 | **已实现更强的原子 tombstone + pending_delete + fenced 异步重试** | tombstone + pending_delete 队列 + 异步重试(参考实现无事务/claim fence) |
 | 工作流抽象 | **Phase 1 代码内 WorkflowDefinition Catalog + immutable Job snapshot**；通用参数 binding / DB 化待做 | **workflow-contract 契约层**(capability 声明 + validate) |
 | Engine 抽象 | providers.ts switch 分发,5 adapter 无统一 interface | **EngineClient interface**(submit/status/cancel/health) |
 | 历史/UI | listUserLibrary(API 每次),无前端缓存 | **3 层历史**(L1 localStorage + L2 Supabase + L3 签名缓存) |
@@ -45,7 +46,7 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 
 ### 1.1 资产删除:tombstone + pending_delete 队列 ⭐ 最高价值
 
-**aigc-studio 缺口**(Grep 确认):无 `app/api/generations/delete` route,无 `tombstone`/`pending_delete`/`deleteGeneration`/`deleteAsset` 逻辑。用户**无法删除自己的作品**。aigc-studio 的 `cleanup.ts` 只清 aigc-r2 孤儿(staging/final),不处理用户主动删除。这是 UX 缺口 + 隐私/合规风险。
+**采纳状态:✅ 后端闭环已完成。** `0009_aigc_asset_deletion.sql` 扩展现有 generation/assets 权威表，没有复制 Playground 的第二套资产模型。
 
 **playground 参考**:
 - `lib/assets/repository.ts:201-254` `tombstoneGenerationAndQueueAssets`:generation 置 `status=deleted`(软删 tombstone)+ assets 置 `state=pending_delete`
@@ -55,12 +56,12 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 - `app/api/generations/delete/route.ts`:删除 route 入口
 - `app/api/assets/cleanup/route.ts`:独立清理 route(vs aigc-studio 内联在 reconcile)
 
-**移植建议**:
-- 加 migration:`aigc_assets` 加 `state`(active/pending_delete/deleted/error)+ `delete_requested_at` + `delete_attempts` + `delete_error` + `deleted_at` 字段;`aigc_generations` 加 `deleted_at` tombstone(当前无 generation status 字段)
-- 加 `lib/assets/delete.ts`:`tombstoneGenerationAndQueueAssets` + `processPendingAssetDeletes`(改用 aigc-studio 的 `deleteObject`)
-- 加 `app/api/library/[id]/route.ts` DELETE:用户删除作品(软删 + 入队)
-- reconcile cron 扩展:扫 `pending_delete` 批量删 R2(复用现有 cron)
-- **`derivedSiblingKeys` 模式直接参考**:用户删除时除 final 外,还要覆盖 preview、输入 staging、provider 版本化对象等派生件。当前 delivery reconcile 已清理正常 staging,这里关注的是用户删除与异常残留的完整闭环。
+**实际实现(没有照搬参考缺陷)**:
+- `tombstone_generation_assets` 在一个 DB 事务内做 owner/job/asset 一致性校验、锁 Generation、写 tombstone 并队列全部 Asset；重复 DELETE 不重置 pending/error/deleted 或 attempts。
+- `claim_pending_asset_deletes` 用 `FOR UPDATE SKIP LOCKED`、claim token 与 lease；失败按 30/60/120/240 秒退避；`complete_asset_delete` 按 token fence，最多 5 次后进入 `error`，过期第五次 claim 由另一个 bounded/SKIP LOCKED RPC 转死信并计数。
+- `lib/assets/delete.ts` 删除每个资产的 final + delivery staging sibling；preview/其它 provider 输出本身是独立 Asset 行，会单独入队。任何其他用户/作品的 active row 仍引用相同 key 时，逻辑删除当前行但保留共享物理对象。
+- `app/api/library/[id]/route.ts` 只接受 session owner；Library 与 Job 结果查询只认未 tombstone Generation + active Asset，serializer 也不会为非 active 资产签新 URL。
+- 独立 `/api/assets/cleanup` 与 reconcile 每日错峰；独立 route 在 45 秒预算内最多 drain 4×25 条，reconcile 最前面再保留一批兜底，以兼容项目既定 Vercel Hobby 目标。单项失败不阻断批次，错误只落稳定码，不保存/返回 R2 key 或原始异常。
 
 **成本**:中(1 migration + 1 repository + 1 route + cron 扩展)。**价值**:填补功能缺口 + 合规。
 
@@ -200,7 +201,7 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 | 1 | Stage 0 最短真实 E2E | 先证明一个 Modal Bridge 文生图任务可完成登录→生成→R2→DB→作品库；magic-byte 与模板静态检查已完成，不能替代真机 |
 | 2 | ✅ Immutable Workflow revision / Job snapshot | 已固定在途 Job 的 execution、template version identity 与 output contract；仅双空迁移前旧任务临时回退当前 Catalog |
 | 3 | 参考图 R2 input staging | inline 链路跑通后解除请求体/DB 大对象边界 |
-| 4 | DB 状态不变量 + 资产删除 | 基于真实状态轨迹补 trigger，再形成 tombstone + pending_delete 生命周期 |
+| 4 | 🟡 DB Job 状态不变量 / ✅ 资产删除 | 资产生命周期已完成；Job 合法状态转换 trigger 仍需基于真实状态轨迹补齐 |
 | 5 | 直连下载 + 批量签名 + 作品库缓存/分页 | 真实作品库有数据后优化 UX/成本 |
 | 6 | ✅ Phase 1 Workflow Execution Catalog | 已由现有图片/视频/3D 工作流落地；通用 binding/DB 化后续继续 |
 | 7 | EngineClient 收敛 | Catalog/引擎边界稳定后渐进重构 adapter |
@@ -211,7 +212,7 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 | playground 文件 | 用途 | 移植目标 |
 |---|---|---|
 | `lib/assets/repository.ts` | tombstone + pending_delete + upsert_owned_asset | `lib/assets/delete.ts` + `app/api/library/[id]/route.ts` |
-| `supabase/migrations/20260610180000_atomic_asset_ownership_rpc.sql` | upsert_owned_asset 原子 RPC | aigc-studio 后续 `0009` migration(拟) |
+| `supabase/migrations/20260610180000_atomic_asset_ownership_rpc.sql` | upsert_owned_asset 原子 RPC | ✅ 参考 owner/invariant 理念实现 `0009_aigc_asset_deletion.sql`，未复制其通用资产表 |
 | `supabase/migrations/20260608182124_establish_jobs_authority.sql` | enforce_job_state_transition trigger | aigc-studio 后续 `0010` migration(拟) |
 | `lib/generation-kernel/workflow-contract.ts` | workflow 契约 + capability | ✅ `lib/workflows/definitions.ts` + `output-contract.ts` |
 | `lib/image-engine/engine-client.ts` + `types.ts` | EngineClient interface + NormalizedStatus | `lib/engines/engine-client.ts`(新建) |
@@ -220,4 +221,4 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 
 ## 7. 一句话总结
 
-aigc-studio 的 aigc-r2 直传链路领先 playground；本轮已吸收**输入真实性校验、模板完整性检查、Phase 1 workflow-contract/catalog 与 immutable workflow revision/Job snapshot**，且未替换现有强交付语义。下一优先级仍是真实 Stage 0 E2E；随后做 input R2 staging、DB 状态约束与资产删除闭环。
+aigc-studio 的 aigc-r2 直传链路领先 playground；当前已吸收**输入真实性校验、模板完整性检查、Phase 1 workflow-contract/catalog、immutable workflow revision/Job snapshot 与 fenced 资产删除闭环**，且未替换现有强交付语义。下一优先级仍是真实 Stage 0 E2E；随后做 input R2 staging 与 Job 状态转换 DB trigger。

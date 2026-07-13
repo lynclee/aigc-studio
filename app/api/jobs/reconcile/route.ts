@@ -3,6 +3,7 @@ import { jsonError } from "@/lib/jobs/api"
 import { reconcileJob } from "@/lib/jobs/reconcile"
 import { listActiveJobs } from "@/lib/jobs/store"
 import { cleanupOrphanDeliveries, type OrphanCleanupResult } from "@/lib/delivery/cleanup"
+import { processPendingAssetDeletes, type AssetDeleteCleanupResult } from "@/lib/assets/delete"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -15,6 +16,23 @@ export async function GET(req: Request) {
   }
 
   try {
+    // 用户删除不能排在慢 provider 轮询之后，否则 serverless timeout 会让队列饥饿。
+    // 独立 /api/assets/cleanup cron 是主驱动；这里前置保留第二条兜底路径。
+    let assetDeleteCleanup: AssetDeleteCleanupResult = {
+      scanned: 0,
+      deadlettered: 0,
+      deleted: 0,
+      retained: 0,
+      failed: 0,
+      exhausted: 0,
+      conflicted: 0,
+    }
+    try {
+      assetDeleteCleanup = await processPendingAssetDeletes(25)
+    } catch (error) {
+      console.error("asset delete cleanup error", { type: error instanceof Error ? error.name : typeof error })
+    }
+
     const jobs = await listActiveJobs(50)
     let succeeded = 0
     let failedJobs = 0
@@ -57,6 +75,7 @@ export async function GET(req: Request) {
       reconcileErrors,
       failureSamples,
       orphanCleanup,
+      assetDeleteCleanup,
     })
   } catch (error) {
     return jsonError(error)

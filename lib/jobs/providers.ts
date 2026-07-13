@@ -78,7 +78,7 @@ export async function submitProvider(
     case "modal-bridge":
       return submitModalBridge(kind, request, ctx)
     case "openrouter-image":
-      return submitOpenRouterImage(request, ctx.workflowSnapshot)
+      return submitOpenRouterImage(request, ctx.workflowSnapshot, ctx.jobId)
     case "fal-image":
       return submitFalImage(request, ctx.workflowSnapshot)
     case "comfyui-image":

@@ -39,6 +39,7 @@ export function ensureOpenRouterImageConfigured(): void {
 export async function submitOpenRouterImage(
   request: SubmitRequest,
   workflowSnapshot: WorkflowJobSnapshot,
+  jobId: string,
 ): Promise<ProviderSubmitResult> {
   const config = getConfig()
   const referenceCount = Array.isArray(request.input.images) ? request.input.images.length : 0
@@ -62,6 +63,7 @@ export async function submitOpenRouterImage(
   const stored = await persistImage({
     image: parseImage(response, config.outputFormat),
     userId: request.userId,
+    jobId,
     model,
     response,
   })
@@ -197,13 +199,14 @@ function parseImage(
 async function persistImage(params: {
   image: { bytes: Buffer; contentType: string }
   userId: string
+  jobId: string
   model: string
   response: Record<string, unknown>
 }): Promise<StoredOpenRouterImage> {
   const providerJobId = randomUUID()
   const asset = await storeImageBytesInR2({
     userId: params.userId,
-    providerJobId,
+    jobId: params.jobId,
     position: 0,
     bytes: params.image.bytes,
     contentType: params.image.contentType,

@@ -9,7 +9,7 @@
 
 - 认证:**Supabase Auth**,归属字段统一 `user_id`,只信服务端会话,绝不信浏览器传入身份。
 - 完成条件:结果**成功落私有 R2 + 写 `aigc_assets`** 才算完成;不把 provider 临时链接当最终作品。
-- 后台兜底:Vercel Cron 每天 `03:30` 调 `/api/jobs/reconcile`;页面打开时也逐任务 reconcile。
+- 后台兜底:Vercel Hobby Cron 每天 `03:30` 调 `/api/jobs/reconcile`;页面打开时也逐任务 reconcile。用户删除后的 R2 队列由独立 `/api/assets/cleanup` 每天 `04:00` 在 45 秒预算内最多 drain 100 条，reconcile 开头另保留一批前置兜底。
 
 ## 后端优先级
 
@@ -56,6 +56,7 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 | `app/api/auth/*` | GitHub/Google OAuth + Supabase 会话 |
 | `app/api/generate/{image,model3d,video}` | 提交任务(经 `lib/jobs/submit-route.ts`) |
 | `app/api/jobs*` / `reconcile` | 任务读取、状态同步、取消、Cron 兜底 + R2 孤儿清理 |
+| `app/api/library/[id]` / `app/api/assets/cleanup` / `lib/assets/delete.ts` | owner-only 作品删除；原子 tombstone+入队、独立 Cron、带 claim/lease/token fence 的异步 R2 清理 |
 | `app/api/internal/asset-intake` / `job-complete` | **aigc-r2 内部 endpoint**(机器对机器,token 鉴权) |
 | `lib/jobs/providers.ts` | provider 路由 + 分发(按 kind 选、按 `job.provider` 分) |
 | `lib/engines/modal-bridge.ts` | Modal Bridge adapter(图片/视频/3D 通用) |
@@ -67,29 +68,32 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 | `lib/workflows/revision.ts` | Job 级不可变 workflow snapshot：固定 definition revision、provider execution、模板版本与输出契约；仅双空旧任务临时回退当前 Catalog |
 | `lib/workflows/validate-template.ts` / `output-contract.ts` | 启动期模板完整性校验 / 所有 provider 共用的产物集合完整性校验 |
 | `lib/assets/r2-store.ts` / `lib/r2.ts` | R2 落库(URL 下载 + 字节直存)/ 预签名 GET·PUT / HeadObject / delete |
-| `supabase/migrations/0001-0008` | 0002 主表;0004 上传台账;0005 原子落库 RPC;0006 租约 fencing + RPC 权限升级;0007 workflow revision/snapshot 一致性与冻结;0008 强制所有新 Job 携带 snapshot |
+| `supabase/migrations/0001-0009` | 0002 主表;0004 上传台账;0005 原子落库 RPC;0006 租约 fencing + RPC 权限升级;0007 workflow revision/snapshot 一致性与冻结;0008 强制新 Job 携带 snapshot;0009 Generation tombstone + Asset 删除队列/fence |
 
 ## 数据模型
 
-`aigc_jobs`(提交+provider 状态)→ `aigc_generations`(一次结果)→ `aigc_assets`(文件,`unique(job_id,asset_type,position)`)。
+`aigc_jobs`(提交+provider 状态)→ `aigc_generations`(一次结果,`deleted_at` 为用户删除 tombstone)→ `aigc_assets`(文件,`unique(job_id,asset_type,position)`,`active → pending_delete → deleted/error`)。
 `aigc_job_uploads`:aigc-r2 在途上传台账,幂等 + 孤儿清理用。四表全开 RLS、无 policy(仅 service_role)。
 
 ## 部署同学必须完成
 
 1. Supabase → Authentication → Providers 启用 GitHub 与 Google,填 Client ID/Secret;两者回调都填 `https://<project-ref>.supabase.co/auth/v1/callback`;Site URL / Redirect URLs 含网站 `/api/auth/callback`(本地加 localhost)。
-2. 全新环境在 SQL Editor 顺序执行 `0001`→`0008`。已有旧库先备份；滚动升级顺序必须是：执行 `0007`(旧/新代码均可读写)→部署本版本(new-write snapshot)→执行 `0008`(拒绝后续双空 INSERT)。即使已经执行过旧版 `0005`，也必须执行 `0006` 以应用租约 fencing 与 RPC 权限加固。
+2. 全新环境在 SQL Editor 顺序执行 `0001`→`0009`。已有旧库先备份；workflow snapshot 的滚动升级顺序必须是：执行 `0007`(旧/新代码均可读写)→部署 snapshot new-write 版本→执行 `0008`。升级到当前资产删除版本时，**先执行 `0009`，再部署读取 `deleted_at/state` 的应用代码**。即使已经执行过旧版 `0005`，也必须执行 `0006` 以应用租约 fencing 与 RPC 权限加固。
 3. Vercel 环境变量(完整见 `.env.example`):
    - 基础:`NEXT_PUBLIC_SITE_URL`、两个 Supabase key、`SUPABASE_SERVICE_ROLE_KEY`、`CRON_SECRET`、`R2_*`、`FAL_KEY`。
    - 图片 provider 按选择:Modal Bridge 用 `MODAL_BRIDGE_*` + `BRIDGE_DELIVERY_TOKEN_SECRET`(+ 生产域名有 Deployment Protection 时 `VERCEL_AUTOMATION_BYPASS_SECRET`);其它见 `.env.example`。
    - 视频/3D 走 Bridge:`AIGC_VIDEO_PROVIDER=modal-bridge` / `AIGC_MODEL3D_PROVIDER=modal-bridge`。
 4. **Modal Secret**(部署插件时):`BRIDGE_API_KEY` + 用 API 节点(seedance/tripo/GPT Image 等)时加 `COMFY_API_KEY_COMFY_ORG`;可选 `AIGC_STUDIO_BASE_URL` / `AIGC_STUDIO_BYPASS_SECRET`。**R2 长期 key 绝不进 Modal**。
 5. 若 Vercel 开 Deployment Protection,确认 OAuth 回调 + 内部 endpoint 可达(内部 endpoint 走 Protection Bypass for Automation)。
+6. 本项目默认兼容 Vercel Hobby，因此两个 Cron 都保持每日一次并错峰；若生产删除 SLA 要求短于 24 小时，升级套餐或使用可控外部 scheduler，以同样的 `Authorization: Bearer $CRON_SECRET` 更频繁调用 `/api/assets/cleanup`。
 
 ## 当前状态(诚实)
 
-- **已完成 + 独立 review + test/typecheck/build 通过**:aigc-r2 全链路、input 参数透传、图生图、视频/3D 与多参考图工作流。Batch1 新增 PNG/JPEG/WebP/GIF signature/MIME 校验、两阶段大小预检、7 模板启动期完整性校验、模板变量非递归替换。Batch2 新增 Phase 1 `WorkflowDefinition` Catalog：Portal 工作流列表/现有参数控件、API allowlist/schema、provider execution/reference、template version、aigc-r2 与 URL/direct provider 输出核验共同消费同一目录；Fal/OpenRouter effective schema 不再展示/接受会被忽略的参数；所有 provider 都拒绝 preview-only 完成；浏览器 public catalog/API/generation 不暴露 provider/variant/env。Batch3 已实现不可变 workflow revision/job snapshot：新任务在入库前由服务端固定 execution variant、template version、reference count 与 output contract；提交、回调 intake、核验/Copy、finalize 及作品库均读取冻结的 Job 快照，generation metadata 不复制第二份权威；非空损坏或身份不匹配一律 fail closed，`0008` 拒绝任何新的双空 Job。
+- **已完成 + 独立 review + test/typecheck/build 通过**:aigc-r2 全链路、input 参数透传、图生图、视频/3D 与多参考图工作流。Batch1 新增 PNG/JPEG/WebP/GIF signature/MIME 校验、两阶段大小预检、7 模板启动期完整性校验、模板变量非递归替换。Batch2 新增 Phase 1 `WorkflowDefinition` Catalog：Portal 工作流列表/现有参数控件、API allowlist/schema、provider execution/reference、template version、aigc-r2 与 URL/direct provider 输出核验共同消费同一目录；Fal/OpenRouter effective schema 不再展示/接受会被忽略的参数；所有 provider 都拒绝 preview-only 完成；浏览器 public catalog/API/generation 不暴露 provider/variant/env。Batch3 已实现不可变 workflow revision/job snapshot。Batch4 已实现资产删除后端闭环：`DELETE /api/library/[id]` 只信 session owner；`0009` 在单事务中 tombstone Generation 并队列全部 Asset；所有公开读取立即过滤删除项；独立错峰 Cron 用 `FOR UPDATE SKIP LOCKED` + lease/token fence 删除 final/staging，跨用户活引用会阻止物理误删；失败按 30/60/120/240 秒退避，最多 5 次后进入有界统计的 `error` 死信。
 - **待部署同学真跑一次**:**任一引擎端到端从未真跑过**。需配好 env + R2 + Modal Secret,跑一次文生图/视频/3D E2E。工作流模板(`z_image_turbo_i2i`、seedance t2v/r2v、tripo t2model/i2model)也需在真 ComfyUI 各验证一次(此环境跑不了 ComfyUI/Modal)。当前明确拒绝 Seedance 1~3 张和 Tripo 1~2 张欠槽输入;逐数量真机验证后才能放宽能力矩阵。
 - **待做**:参考图先直传 job-scoped R2 staging(当前 inline data-uri 有 3MiB 合计保护)、OpenRouter Video adapter、视频/3D 的分辨率·时长·质量 UI 控件。Catalog 下一阶段做按 workflow 路由 provider 与通用 `parameters[] + binding`；当前仍是代码注册式 Phase 1，不应宣称已达到 DB/UGC 的“只加数据不发版”。
+
+删除语义:RPC 提交后 Library/Job 结果立即不再返回或新签名该作品；物理 R2 删除是最终一致的，Hobby 默认调度下通常在下一次错峰 Cron（最长约 24 小时）处理。此前已发放的 GET 预签名 URL 最长仍可使用约 1 小时，但对象被 Cron 提前删除后会立即失效。`error` 资产不会被重复 DELETE 重置重试次数，需运维显式处置/重入队。
 
 Workflow snapshot 只冻结在途任务的**执行身份与交付契约**；MIME、大小、鉴权、归属、租约等全局安全策略继续使用部署时最新规则。`workflow_revision` 与 `workflow_snapshot` 同时为空的迁移前旧任务会临时回退当前 Catalog；首次提升任一 definition revision 前，应先让这批 active legacy jobs 完成或终止，避免旧任务被新目录语义解释。
 

@@ -52,7 +52,7 @@ describe("OpenRouter image workflow execution metadata", () => {
   it("uses the catalog variant for model selection and persists its audit identity", async () => {
     const result = await submitOpenRouterImage(request("detail"), createWorkflowJobSnapshot({
       kind: "image", workflowId: "detail", provider: "openrouter-image",
-    }))
+    }), "job-internal-1")
 
     const requestBody = JSON.parse(String(fetchJsonMock.mock.calls[0]?.[1]?.body))
     expect(requestBody.model).toBe("detail-model")
@@ -62,6 +62,10 @@ describe("OpenRouter image workflow execution metadata", () => {
       execution_variant: "openrouter-detail",
       template_version: "1",
     })
+    expect(storeImageBytesInR2Mock).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "user-1",
+      jobId: "job-internal-1",
+    }))
   })
 
   it("uses the pinned variant instead of resolving the live catalog again", async () => {
@@ -70,7 +74,7 @@ describe("OpenRouter image workflow execution metadata", () => {
       executionVariant: "openrouter-detail",
       templateVersion: "legacy-7",
     }
-    const result = await submitOpenRouterImage(request("standard"), pinned)
+    const result = await submitOpenRouterImage(request("standard"), pinned, "job-internal-1")
     const requestBody = JSON.parse(String(fetchJsonMock.mock.calls[0]?.[1]?.body))
     expect(requestBody.model).toBe("detail-model")
     expect(result.response).toMatchObject({ execution_variant: "openrouter-detail", template_version: "legacy-7" })
@@ -83,7 +87,7 @@ describe("OpenRouter image workflow execution metadata", () => {
       ...createWorkflowJobSnapshot({ kind: "image", workflowId: "standard", provider: "openrouter-image" }),
       referenceCount: 1,
     }
-    await expect(submitOpenRouterImage(withReference, snapshot)).rejects.toBeInstanceOf(ProviderInputError)
+    await expect(submitOpenRouterImage(withReference, snapshot, "job-internal-1")).rejects.toBeInstanceOf(ProviderInputError)
     expect(fetchJsonMock).not.toHaveBeenCalled()
   })
 })

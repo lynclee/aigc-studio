@@ -114,6 +114,7 @@ function queryFor(table: string) {
   const chain: Record<string, unknown> = {}
   chain.select = vi.fn(() => chain)
   chain.eq = vi.fn(() => chain)
+  chain.is = vi.fn(() => chain)
   chain.not = vi.fn(() => chain)
   chain.maybeSingle = vi.fn(async () => ({
     data: table === "aigc_generations"

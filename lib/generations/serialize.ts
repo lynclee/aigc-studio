@@ -3,7 +3,11 @@ import type { AigcAssetRecord, AigcGenerationWithWorkflowSnapshot } from "@/lib/
 import { workflowOutputContractForGeneration } from "@/lib/workflows/revision"
 
 export async function serializeAsset(asset: AigcAssetRecord): Promise<Record<string, unknown>> {
-  const signedUrl = asset.r2_key ? await signGetUrl(asset.r2_key).catch(() => null) : null
+  // Defense in depth: public store queries already filter these rows, but a
+  // non-active/tombstoned Asset must never obtain a fresh signed URL even if a
+  // future caller accidentally passes it directly.
+  const visible = asset.state === "active" && asset.deleted_at === null
+  const signedUrl = visible && asset.r2_key ? await signGetUrl(asset.r2_key).catch(() => null) : null
   return {
     id: asset.id,
     generation_id: asset.generation_id,
@@ -33,6 +37,10 @@ export async function serializeGeneration(
     prompt: generation.prompt,
     created_at: generation.created_at,
     primary_asset_types: primaryAssetTypes,
-    assets: await Promise.all(assets.map(serializeAsset)),
+    assets: await Promise.all(
+      assets
+        .filter((asset) => asset.state === "active" && asset.deleted_at === null)
+        .map(serializeAsset),
+    ),
   }
 }

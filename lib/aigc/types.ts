@@ -64,6 +64,7 @@ export interface AigcGenerationRecord {
   provider_job_id: string | null
   metadata: Record<string, unknown>
   created_at: string
+  deleted_at: string | null
 }
 
 /** Generation row plus the immutable workflow authority joined from its Job. */
@@ -85,4 +86,12 @@ export interface AigcAssetRecord {
   content_type: string | null
   metadata: Record<string, unknown>
   created_at: string
+  state: "active" | "pending_delete" | "deleted" | "error"
+  delete_requested_at: string | null
+  delete_attempts: number
+  delete_error: string | null
+  delete_retry_after: string | null
+  delete_claim_token: string | null
+  delete_lease_until: string | null
+  deleted_at: string | null
 }

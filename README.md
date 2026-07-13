@@ -98,9 +98,12 @@ supabase/migrations/0003_rename_legacy_user_columns.sql
 supabase/migrations/0004_aigc_job_uploads.sql
 supabase/migrations/0005_finalize_job_assets.sql
 supabase/migrations/0006_harden_finalize_job_assets.sql
+supabase/migrations/0007_pin_workflow_job_revision.sql
+supabase/migrations/0008_require_workflow_job_snapshot.sql
+supabase/migrations/0009_aigc_asset_deletion.sql
 ```
 
-当前流程使用 `aigc_jobs`、`aigc_generations`、`aigc_assets` 三张表，以 Supabase 登录用户的 `user_id` 做作品归属;`0004` 增加上传台账，`0005` 增加原子 finalize RPC，`0006` 为已执行旧版 `0005` 的数据库补上租约 fencing 与权限加固。**已有旧版数据库不要重新执行历史 migration**；先备份，只补执行未跑过的 migration。
+当前流程使用 `aigc_jobs`、`aigc_generations`、`aigc_assets` 三张表，以 Supabase 登录用户的 `user_id` 做作品归属;`0004` 增加上传台账，`0005-0006` 增加并加固原子 finalize RPC，`0007-0008` 固定并强制 Job workflow snapshot，`0009` 增加原子作品 tombstone 与 fenced R2 删除队列。**已有旧版数据库不要重新执行历史 migration**；先备份，只补执行未跑过的 migration，具体滚动顺序见 `docs/HANDOFF.md`。
 
 Cloudflare R2 是正式作品库。生成服务返回的文件会先安全地存入 R2，再进入个人作品库。图片可选 Modal、OpenRouter、fal 或自建 ComfyUI；3D 与视频使用 fal。普通使用者不会看到、更不能选择这些服务。
 
@@ -108,8 +111,8 @@ Cloudflare R2 是正式作品库。生成服务返回的文件会先安全地存
 
 1. 配好 Supabase 的 GitHub / Google 登录和回调地址。
 2. 在 Vercel 填好环境变量，特别是 `NEXT_PUBLIC_SITE_URL`、两项 Supabase key、R2 与 `CRON_SECRET`。
-3. 在 Supabase 执行三份迁移。
-4. 确认 `vercel.json` 的 Cron 是每天 `03:30`（`30 3 * * *`，适用于 Vercel Hobby）。
+3. 在全新 Supabase 按顺序执行 `0001`→`0009`；旧库按 `docs/HANDOFF.md` 的滚动顺序升级。
+4. 确认 `vercel.json` 有两个适配 Vercel Hobby 的每日 Cron：`03:30 /api/jobs/reconcile` 与 `04:00 /api/assets/cleanup`。
 5. 如果 Vercel 开启了 Deployment Protection，确认 OAuth 外部回调不会被它拦住。
 6. 打开网站，依次测试 GitHub 登录、Google / Gmail 登录、任务提交和个人作品库。
 

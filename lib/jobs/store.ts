@@ -452,6 +452,7 @@ export async function getGenerationForJob(jobId: string, userId: string): Promis
     .select("*, aigc_jobs!inner(workflow_revision, workflow_snapshot)")
     .eq("job_id", jobId)
     .eq("user_id", userId)
+    .is("deleted_at", null)
     .maybeSingle()
   if (error) throw new BackendStoreError(`load generation failed: ${error.message}`)
   if (!generation) return { generation: null, assets: [] }
@@ -462,6 +463,8 @@ export async function getGenerationForJob(jobId: string, userId: string): Promis
     .select("*")
     .eq("generation_id", generationWithWorkflow.id)
     .eq("user_id", userId)
+    .eq("state", "active")
+    .is("deleted_at", null)
     .not("r2_key", "is", null)
     .order("position", { ascending: true })
   if (assetError) throw new BackendStoreError(`load assets failed: ${assetError.message}`)
@@ -478,6 +481,7 @@ export async function listUserLibrary(userId: string): Promise<{
     .select("*, aigc_jobs!inner(status, workflow_revision, workflow_snapshot)")
     .eq("user_id", userId)
     .eq("aigc_jobs.status", "succeeded")
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(100)
   if (error) throw new BackendStoreError(`load library failed: ${error.message}`)
@@ -491,6 +495,8 @@ export async function listUserLibrary(userId: string): Promise<{
     .select("*")
     .eq("user_id", userId)
     .in("generation_id", ids)
+    .eq("state", "active")
+    .is("deleted_at", null)
     .not("r2_key", "is", null)
     .order("created_at", { ascending: false })
     .order("position", { ascending: true })
@@ -562,6 +568,8 @@ export async function assetExistsForKey(r2Key: string): Promise<boolean> {
     .from("aigc_assets")
     .select("id", { count: "exact", head: true })
     .eq("r2_key", r2Key)
+    .eq("state", "active")
+    .is("deleted_at", null)
   if (error) throw new BackendStoreError(`check asset by key failed: ${error.message}`)
   return (count ?? 0) > 0
 }

@@ -77,7 +77,7 @@
 | **引擎 Engine** | 真正执行生成的后端:自建 Modal ComfyUI、第三方工作流 API(如 RunningHub)、模型 API(fal / OpenRouter)等。工作流声明自己走哪个引擎 |
 | **任务 Job** | 用户一次提交产生一条任务,有完整生命周期:排队 → 生成 → 完成 / 失败 / 取消 |
 | **作品 / 资产 Asset** | 任务成功后产出的文件(图 / 视频 / 3D 模型),保存在私有云存储,归属到用户 |
-| **个人作品库 Library** | 用户所有成功作品的集合,按类型展示、可下载 |
+| **个人作品库 Library** | 用户所有成功且未删除作品的集合,按类型展示、可下载；删除后先隐藏并异步清理私有存储 |
 
 ---
 
@@ -231,7 +231,7 @@ Generation(一次成功结果) → Asset(实际文件:R2 key / 类型 / 尺寸)
 
 | 层 | 状态 |
 |---|---|
-| 已实现(待真机验证) | 三入口工作台、任务生命周期(排队/生成/完成/取消,含租约与 DB fence)、多引擎 adapter、GitHub/Google 登录、Modal Bridge `aigc-r2` 网站侧直传/核验/原子落库链路、Phase 1 代码内 Workflow Catalog(公共目录、provider-effective input schema、执行变体、模板版本、输出契约)、Job 级 immutable workflow revision/snapshot(固定 execution、模板版本身份与交付契约) |
+| 已实现(待真机验证) | 三入口工作台、任务生命周期(排队/生成/完成/取消,含租约与 DB fence)、多引擎 adapter、GitHub/Google 登录、Modal Bridge `aigc-r2` 网站侧直传/核验/原子落库链路、Phase 1 代码内 Workflow Catalog、Job 级 immutable workflow revision/snapshot、作品删除后端闭环(原子 tombstone/queue、立即停止公开读取与签名、带 lease/token fence 的异步 R2 清理) |
 | 设计中 / 下一阶段 | 通用参数 `parameters[] + binding`、按 workflow 选择引擎、DB/UGC 工作流目录与运营能力 |
 | 待验证 | 尚未配置线上环境变量,**任一引擎的真实端到端生成还未跑通一次**;上线联调是紧接着的重点 |
 

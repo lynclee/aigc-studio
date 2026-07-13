@@ -103,7 +103,7 @@ export async function getComfyUiImageStatus(job: AigcJobRecord): Promise<Provide
       const downloaded = await downloadOutputImage(config, file)
       return storeImageBytesInR2({
         userId: job.user_id,
-        providerJobId: job.provider_job_id as string,
+        jobId: job.id,
         position,
         bytes: downloaded.bytes,
         contentType: downloaded.contentType,
