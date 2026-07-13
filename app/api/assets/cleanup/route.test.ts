@@ -131,17 +131,25 @@ describe("GET /api/assets/cleanup", () => {
     expect(body).toContain("Service temporarily unavailable")
     expect(body).not.toContain("secret SQL")
     expect(body).not.toContain("r2/key")
+    expect(getBacklogMock).not.toHaveBeenCalled()
   })
 
-  it("returns a safe 5xx when aggregate backlog monitoring fails", async () => {
+  it("keeps successful cleanup visible when aggregate backlog monitoring fails", async () => {
     getBacklogMock.mockRejectedValue(new BackendStoreError("secret SQL and asset identity"))
-    vi.spyOn(console, "error").mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     const response = await call("Bearer cron-secret")
-    const body = await response.text()
-    expect(response.status).toBe(500)
-    expect(body).toContain("Service temporarily unavailable")
-    expect(body).not.toContain("secret SQL")
-    expect(body).not.toContain("asset identity")
+    const body = await response.json()
+    expect(response.status).toBe(200)
+    expect(processPendingMock).toHaveBeenCalledWith(25)
+    expect(body).toMatchObject({
+      ok: true,
+      batches: 1,
+      assetDeleteCleanup: { scanned: 1, deleted: 1 },
+      assetDeleteBacklog: null,
+    })
+    expect(JSON.stringify(body)).not.toContain("secret SQL")
+    expect(JSON.stringify(body)).not.toContain("asset identity")
+    expect(errorSpy).toHaveBeenCalledWith("asset delete backlog monitor error", { type: "Error" })
   })
 
   it("logs only the aggregate dead-letter count", async () => {

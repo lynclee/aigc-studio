@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import {
   getAssetDeleteBacklog,
   processPendingAssetDeletes,
+  type AssetDeleteBacklog,
   type AssetDeleteCleanupResult,
 } from "@/lib/assets/delete"
 import { jsonError } from "@/lib/jobs/api"
@@ -31,9 +32,18 @@ export async function GET(req: Request) {
       batches += 1
       if (batch.scanned < BATCH_SIZE && batch.deadlettered < BATCH_SIZE) break
     }
-    const assetDeleteBacklog = await getAssetDeleteBacklog()
-    if (assetDeleteBacklog.errorTotal > 0) {
-      console.error("asset delete dead letters present", { errorTotal: assetDeleteBacklog.errorTotal })
+    let assetDeleteBacklog: AssetDeleteBacklog | null = null
+    try {
+      assetDeleteBacklog = await getAssetDeleteBacklog()
+      if (assetDeleteBacklog.errorTotal > 0) {
+        console.error("asset delete dead letters present", { errorTotal: assetDeleteBacklog.errorTotal })
+      }
+    } catch (error) {
+      // Queue work has already committed. Monitoring degradation must remain
+      // visible without misreporting the successful destructive batch as 500.
+      console.error("asset delete backlog monitor error", {
+        type: error instanceof Error ? error.name : typeof error,
+      })
     }
     return NextResponse.json({ ok: true, batches, assetDeleteCleanup, assetDeleteBacklog })
   } catch (error) {

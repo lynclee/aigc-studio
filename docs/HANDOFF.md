@@ -92,7 +92,7 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 1. **迁移顺序不可颠倒。** 全新库执行 `0001→0010`。从旧版滚动升级 workflow snapshot 时必须 `0007` → 部署会写 snapshot 的版本 → `0008`；资产删除版本必须 `0009` → `0010` → 再部署会过滤 `deleted_at/state`、调用 `asset_delete_backlog_counts()` 的当前应用。不要在旧代码仍写无 snapshot Job 时提前执行 `0008`。
 2. **首次提升 workflow revision 前排空 legacy active Job。** 运行 `select count(*) from public.aigc_jobs where status in ('queued','running') and workflow_snapshot is null;`，结果必须为 `0`；否则先 reconcile/终止，不让旧任务被新 Catalog 语义解释。
 3. **审生产 R2 key 权威格式。** 发布删除 worker 前按下方查询分类，`unknown` 必须为 `0`；同时确认旧 OpenRouter Generation 的 `provider_job_id` 不缺失。无法归类的历史资产先迁移/豁免评审，不能靠放宽删除前缀解决。
-4. **评估 `0009/0010` 锁窗口。** 先看 `aigc_assets` 估算行数和总大小；小表直接维护窗口执行。`0010` 的 version CHECK 已使用 `NOT VALID → VALIDATE`，但 error partial index 仍会扫描现有表。大表需另做经 review 的 `CREATE INDEX CONCURRENTLY` 分阶段迁移，不能临时改已发布 migration 或在业务高峰硬跑。
+4. **评估 `0009/0010` 锁窗口。** 先看 `aigc_assets` / `aigc_generations` 估算行数和总大小；小表直接维护窗口执行。主要风险在 `0009`：它会新增多列、校验 4 个未使用 `NOT VALID` 的 CHECK，并创建 3 个非 `CONCURRENTLY` 索引；约束变更会持有强锁，普通建索引也会扫描全表并阻塞写入。`0010` 的 version CHECK 已使用 `NOT VALID → VALIDATE`，但 error partial index 仍会扫描现有表。大表需另做经 review 的分阶段迁移（例如 `NOT VALID`、`CREATE INDEX CONCURRENTLY`、再 `VALIDATE`），不能临时改已发布 migration 或在业务高峰硬跑。
 5. **确认 Cron 配额和鉴权。** `vercel.json` 当前恰好两条每日 Cron（03:30 reconcile、04:00 cleanup）；部署前确认套餐仍允许，勿直接增加第三条。缺失/错误 `CRON_SECRET` 必须 401 且 cleanup/backlog 零调用，正确鉴权响应只能含聚合计数。
 
 R2 key 分类审计（只输出类别与数量，不导出 key）：
@@ -125,19 +125,29 @@ select count(*) as legacy_openrouter_without_provider_job_id
 from public.aigc_generations
 where provider like 'openrouter%' and provider_job_id is null;
 
-select reltuples::bigint as estimated_rows,
-       pg_size_pretty(pg_total_relation_size('public.aigc_assets')) as total_size
-from pg_class where oid = 'public.aigc_assets'::regclass;
+select oid::regclass as relation,
+       reltuples::bigint as estimated_rows,
+       pg_size_pretty(pg_total_relation_size(oid)) as total_size
+from pg_class
+where oid in ('public.aigc_assets'::regclass, 'public.aigc_generations'::regclass)
+order by relation;
 ```
 
 ### 资产删除死信监控与重驱动 Runbook
 
-- 每次 cleanup 后响应包含 `pendingTotal/pendingDue/pendingLeased/retryWait/deadletterDue/errorTotal` 与最老时间；也可在 SQL Editor 执行 `select public.asset_delete_backlog_counts();`。`error_total > 0` 或 pending 连续两天不下降即告警。
+- backlog 正常时，cleanup 响应包含 `pendingTotal/pendingDue/pendingLeased/retryWait/deadletterDue/errorTotal` 与最老时间；也可在 SQL Editor 执行 `select public.asset_delete_backlog_counts();`。`error_total > 0` 或 pending 连续两天不下降即告警。观测 RPC 失败不回滚已提交的删除批次：route 返回 200、`assetDeleteBacklog: null`，并写稳定的 monitor error 日志；此时必须单独修复监控，不能把 `null` 当成零 backlog。
 - 先检查稳定 `delete_error`、R2 凭据/权限、跨用户活引用与 key 分类。**不要**把 R2 key、原始异常、密钥写进 actor/reason 或工单公开字段。
 - 只有已 tombstone、owner/job/generation 一致、key 属于当前或受控 legacy namespace 的 `error` 资产能重驱动；普通用户重复 DELETE 不会重置死信。
 - 修复根因后由 service-role 运维身份执行一次：
 
 ```sql
+-- 只列运维所需的稳定字段；谓词与排序匹配 error partial index，可供 planner 使用。
+select id, delete_redrive_version, delete_attempts, delete_error, delete_requested_at
+from public.aigc_assets
+where state = 'error'
+order by delete_requested_at asc
+limit 100;
+
 select id, delete_redrive_version, delete_attempts, delete_error
 from public.aigc_assets
 where id = '<asset-uuid>'::uuid and state = 'error';
@@ -151,7 +161,9 @@ select public.redrive_asset_delete(
 ```
 
   调用前从同一资产读取当前 `delete_redrive_version`，把它作为 CAS 版本传入；旧命令重放或并发操作者只能有一个成功。`actor` 只允许可归责标识，`reason` 只允许小写稳定码。成功必须返回 `requeued=true`、资产变 `pending_delete/attempts=0`，version 加一，且 `aigc_asset_delete_redrive_events` 恰好新增一条；下一轮 cleanup 应使 pending 下降。若返回 `requeued=false`、RPC 拒绝、或资产再次进入 `error`，立即停止盲目重置并重新调查。
-- 生产启用前做一次 canary：合法 tombstone+error 行应成功；未 tombstone、owner 不一致、越权 key 三组应全部拒绝且不写审计。实测 anon/authenticated 调 backlog/redrive 均 permission denied，service_role 成功；真实 PostgreSQL 两连接并发重驱动只允许一条审计。
+- 生产启用前做一次 canary：合法 tombstone+error 行应成功；未 tombstone、owner 不一致、越权 key 三组应全部拒绝且不写审计。上线前必须用真实 PostgreSQL 验证：anon/authenticated 调 backlog/redrive 均 permission denied，service_role 成功；两连接并发重驱动同一资产时只能有一条审计。仓库当前只有 SQL contract 测试，不得把它当成真实数据库并发/RLS 证据。
+- 执行 `0010` 后刷新 Supabase/PostgREST schema cache 与连接，再跑首次 cleanup/reconcile；若首次请求报 PostgreSQL `0A000 cached plan must not change result type`，刷新连接后重试并确认告警消失。原因是 `0010` 给 `aigc_assets` 增加了列，而 `claim_pending_asset_deletes()` 返回该表的复合类型 `setof public.aigc_assets`。
+- 当前没有静默清除永久死信的 `abandoned` 状态。若 authority/key 约束导致无法 redrive，保持 `error` 告警、禁止裸写 `UPDATE` 绕过审计，并升级为单独的数据保留/合规事件；未来若引入终态豁免，必须另做带 actor/reason、不可变审计和独立 backlog 的设计评审。
 
 ## 当前状态(诚实)
 

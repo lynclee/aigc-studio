@@ -44,7 +44,9 @@ GitHub 登录（优先）/ Google-Gmail 登录
 | `/api/internal/asset-intake` / `/api/internal/job-complete` | aigc-r2 内部 endpoint，供 Modal Bridge 回调；**机器对机器，不走 getSession**，认 `delivery_token` + `x-vercel-protection-bypass` |
 | `/api/jobs` / `/api/jobs/[id]` | 当前用户任务、状态同步与取消 |
 | `/api/jobs/reconcile` | Vercel Cron 后台检查 + R2 孤儿清理，需要 `CRON_SECRET` |
+| `/api/assets/cleanup` | Vercel Cron 异步清理用户删除后的 R2 资产队列，返回聚合 backlog，需要 `CRON_SECRET` |
 | `/api/library` | 当前用户个人作品库 |
+| `DELETE /api/library/[id]` | owner-only 隐藏作品并把 R2 资产送入 fenced 删除队列 |
 
 ## 认证与数据归属
 
@@ -66,7 +68,7 @@ GitHub 登录（优先）/ Google-Gmail 登录
 - ComfyUI 接入的是自建服务的 `/prompt`、`/history/:id`、`/view`。若 API 工作流使用 GPT Image 等付费节点，`COMFY_ORG_API_KEY` 只在服务端随 `/prompt` 的 `extra_data.api_key_comfy_org` 传给 ComfyUI，不会进入浏览器。
 - 任务检查要按已存的 `aigc_jobs.provider` 分发；切换图片服务后，保留旧服务配置直到旧任务全部结束。
 - 只有结果成功保存到私有 R2、写入 `aigc_assets` 后，任务才能标为完成。不要把 provider 临时链接当最终作品。
-- `vercel.json` 当前每天 `03:30` 运行一次 reconciliation（Vercel Hobby 可用）。
+- `vercel.json` 当前每天运行两条 Vercel Hobby Cron：`03:30 /api/jobs/reconcile`，`04:00 /api/assets/cleanup`。
 
 ## 环境变量
 

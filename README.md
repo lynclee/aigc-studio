@@ -18,7 +18,7 @@ GitHub 登录（优先）/ Google-Gmail 登录
   → 完成作品进入个人作品库
 ```
 
-提交后，任务记录会先写进数据库，再交给部署同学选定的云端生成服务。使用者重新打开网站时会检查自己的任务；Vercel Cron 每天做一次后台兜底检查。作品只有成功保存到 Cloudflare R2 后，才会出现在个人作品库。
+提交后，任务记录会先写进数据库，再交给部署同学选定的云端生成服务。使用者重新打开网站时会检查自己的任务；两条 Vercel Cron 每天分别做任务对账与删除队列清理。作品只有成功保存到 Cloudflare R2 后，才会出现在个人作品库。
 
 ## 角色分工
 
@@ -40,7 +40,9 @@ GitHub 登录（优先）/ Google-Gmail 登录
        ├─ 任务状态 → Supabase
        └─ 个人作品库 → Cloudflare R2
 
-Vercel Cron → 每天 03:30 检查未完成任务
+Vercel Cron
+  ├─ 每天 03:30 /api/jobs/reconcile 检查未完成任务
+  └─ 每天 04:00 /api/assets/cleanup 清理删除队列
 ```
 
 ## 第一部分：部署 / 运营
@@ -127,6 +129,7 @@ Cloudflare R2 是正式作品库。生成服务返回的文件会先安全地存
 | `POST /api/auth/logout` | 退出登录 |
 | `POST /api/generate/image` / `model3d` / `video` | 提交生成任务 |
 | `GET /api/jobs` / `GET /api/jobs/[id]` | 读取当前用户自己的任务与状态 |
+| `GET /api/assets/cleanup` | Cron-only 清理用户删除后的 R2 资产队列，需要 `CRON_SECRET` |
 | `GET /api/library` | 读取当前用户自己的个人作品库 |
 | `DELETE /api/library/[id]` | owner-only 隐藏作品并把 R2 资产送入 fenced 删除队列 |
 
