@@ -27,9 +27,9 @@ import {
   parseSize,
   stagingKeyForFinal,
 } from "@/lib/delivery/asset-policy"
-import { assetRuleForWorkflow, workflowDefinition } from "@/lib/workflows/definitions"
+import { workflowAssetRuleForJob } from "@/lib/workflows/revision"
 import {
-  validateWorkflowOutputs,
+  validateJobWorkflowOutputs,
   WorkflowOutputContractError,
 } from "@/lib/workflows/output-contract"
 
@@ -89,7 +89,7 @@ export async function verifyDeliveredAssets(
       throw new DeliveryVerifyError("asset_type_not_allowed")
     }
     const assetType = raw.asset_type
-    const assetRule = assetRuleForWorkflow(job.kind, job.workflow_id, assetType)
+    const assetRule = workflowAssetRuleForJob(job, assetType)
     if (!assetRule) throw new DeliveryVerifyError("asset_type_not_allowed")
     const position = parsePosition(raw.position)
     if (position === null) throw new DeliveryVerifyError("invalid_position")
@@ -137,7 +137,7 @@ export async function verifyDeliveredAssets(
 
   // M5:完整输出集合由 workflow output contract 声明,不依赖 asset_type 命名约定。
   try {
-    validateWorkflowOutputs(job.kind, job.workflow_id, plans)
+    validateJobWorkflowOutputs(job, plans)
   } catch (error) {
     if (error instanceof WorkflowOutputContractError) {
       throw new DeliveryVerifyError(error.code, error.status)

@@ -5,9 +5,10 @@ vi.mock("@/lib/jobs/store", () => ({
   getOwnedJob: vi.fn(),
   terminalStatus: vi.fn(() => false),
 }))
-vi.mock("@/lib/delivery/token", () => ({
-  verifyDeliveryToken: vi.fn(() => ({ jobId: "job-1", userId: "user-1" })),
-}))
+vi.mock("@/lib/delivery/token", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/delivery/token")>()
+  return { ...actual, verifyDeliveryToken: vi.fn(() => ({ jobId: "job-1", userId: "user-1" })) }
+})
 vi.mock("@/lib/delivery/uploads", () => ({ getOrCreateUpload: vi.fn() }))
 vi.mock("@/lib/r2", () => ({
   getR2Env: vi.fn(() => ({ accountId: "a", accessKeyId: "b", secretAccessKey: "c", bucket: "d" })),
@@ -49,6 +50,39 @@ beforeEach(() => {
 })
 
 describe("POST /api/internal/asset-intake", () => {
+  it("accepts a retired workflow asset from the immutable Job snapshot", async () => {
+    vi.mocked(getOwnedJob).mockResolvedValue({
+      ...baseJob,
+      kind: "image",
+      provider: "modal-bridge",
+      workflow_id: "retired-v1",
+      workflow_revision: "7",
+      workflow_snapshot: retiredSnapshot(),
+    })
+
+    const response = await POST(request({
+      asset_type: "legacy-render", content_type: "image/png", filename: "legacy.png",
+    }))
+    expect(response.status).toBe(200)
+    expect(getOrCreateUpload).toHaveBeenCalledWith(expect.objectContaining({ assetType: "legacy-render" }))
+  })
+
+  it("fails before allocating an upload when a pinned snapshot is malformed", async () => {
+    vi.mocked(getOwnedJob).mockResolvedValue({
+      ...baseJob,
+      kind: "image",
+      provider: "modal-bridge",
+      workflow_id: "retired-v1",
+      workflow_revision: "7",
+      workflow_snapshot: { ...retiredSnapshot(), kind: "video" },
+    })
+
+    const response = await POST(request({ asset_type: "legacy-render", content_type: "image/png" }))
+    expect(response.status).toBe(500)
+    expect(getOrCreateUpload).not.toHaveBeenCalled()
+    expect(signPutUrl).not.toHaveBeenCalled()
+  })
+
   it("accepts an image preview for a video workflow", async () => {
     vi.mocked(getOwnedJob).mockResolvedValue({ ...baseJob, kind: "video" })
 
@@ -99,3 +133,17 @@ describe("POST /api/internal/asset-intake", () => {
     expect(getOrCreateUpload).toHaveBeenCalledOnce()
   })
 })
+
+function retiredSnapshot() {
+  return {
+    schemaVersion: 1,
+    definitionRevision: "7",
+    kind: "image",
+    workflowId: "retired-v1",
+    provider: "modal-bridge",
+    executionVariant: "retired-image-v7",
+    templateVersion: "7",
+    referenceCount: 0,
+    outputContract: [{ assetType: "legacy-render", category: "image", required: true, primary: true }],
+  }
+}

@@ -22,6 +22,7 @@ import {
 } from "@/lib/engines/openrouter-image"
 import { ProviderConfigurationError, ProviderContractError } from "@/lib/engines/provider-utils"
 import type { WorkflowProvider } from "@/lib/workflows/definitions"
+import type { WorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 // 各创作类型的后端优先/默认:图片 Modal → OpenRouter → fal;视频/3D 目前默认 fal,可切 modal-bridge。
 // 这不是自动 fallback;实际用哪个只由对应的 AIGC_*_PROVIDER 决定。
@@ -35,6 +36,7 @@ export type ProviderName = WorkflowProvider
 /** 提交时的服务端上下文；modal-bridge 用 jobId 现签 delivery_token,其它 provider 忽略。 */
 export interface SubmitContext {
   jobId: string
+  workflowSnapshot: WorkflowJobSnapshot
 }
 
 export function providerNameForKind(kind: AigcKind): ProviderName {
@@ -72,18 +74,18 @@ export async function submitProvider(
 ): Promise<ProviderSubmitResult> {
   switch (provider) {
     case "modal-image":
-      return submitModalImage(request)
+      return submitModalImage(request, ctx.workflowSnapshot)
     case "modal-bridge":
       return submitModalBridge(kind, request, ctx)
     case "openrouter-image":
-      return submitOpenRouterImage(request)
+      return submitOpenRouterImage(request, ctx.workflowSnapshot)
     case "fal-image":
-      return submitFalImage(request)
+      return submitFalImage(request, ctx.workflowSnapshot)
     case "comfyui-image":
-      return submitComfyUiImage(request)
+      return submitComfyUiImage(request, ctx.workflowSnapshot)
     case "fal-model3d":
     case "fal-video":
-      if (kind === "model3d" || kind === "video") return submitFalStyle(kind, request)
+      if (kind === "model3d" || kind === "video") return submitFalStyle(kind, request, ctx.workflowSnapshot)
       throw new ProviderConfigurationError(`No provider is available for ${kind}`)
     default:
       throw new ProviderConfigurationError(`No provider is available for ${kind}`)

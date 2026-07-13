@@ -28,6 +28,7 @@ import {
   workflowExecutionFor,
   type WorkflowProvider,
 } from "@/lib/workflows/definitions"
+import type { WorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 export class UnknownWorkflowError extends Error {
   readonly status = 400
@@ -53,6 +54,7 @@ export type RenderWorkflowParams = {
   input: Record<string, unknown>
   workflowId: string
   provider: WorkflowProvider
+  workflowSnapshot?: WorkflowJobSnapshot
 }
 
 // video / model3d 的 Bridge 模板注册表(原始 API JSON)。公开工作流、provider 映射、版本和
@@ -150,26 +152,43 @@ function renderBridgeWorkflow(
   kind: AigcKind,
   params: RenderWorkflowParams,
 ): RenderedWorkflow {
-  const execution = workflowExecutionFor(kind, params.workflowId, params.provider)
-  if (!execution) throw new UnknownWorkflowError(kind, params.workflowId)
   const seed = seedFromInput(params.input)
   const referenceNames = referenceNamesFrom(params.input)
   const usesReference = referenceNames.length > 0
-  if (usesReference && !execution.reference?.enabled) {
-    throw new WorkflowReferenceInputError("reference_images_not_supported")
+  let variant: string
+  let templateVersion: string
+  if (params.workflowSnapshot) {
+    const snapshot = params.workflowSnapshot
+    if (
+      snapshot.kind !== kind ||
+      snapshot.workflowId !== params.workflowId ||
+      snapshot.provider !== params.provider ||
+      snapshot.referenceCount !== referenceNames.length
+    ) {
+      throw new WorkflowReferenceInputError("invalid_workflow_snapshot")
+    }
+    variant = snapshot.executionVariant
+    templateVersion = snapshot.templateVersion
+  } else {
+    const execution = workflowExecutionFor(kind, params.workflowId, params.provider)
+    if (!execution) throw new UnknownWorkflowError(kind, params.workflowId)
+    if (usesReference && !execution.reference?.enabled) {
+      throw new WorkflowReferenceInputError("reference_images_not_supported")
+    }
+    // 欠槽的 API-node 输入是否 optional 尚未真机验证。v1 只接受导出图的完整槽位，避免向
+    // ComfyUI 提交靠猜测裁剪出的图；验证后可在 capability + 这里一起放宽。
+    if (
+      usesReference &&
+      execution.reference &&
+      (referenceNames.length < execution.reference.minImages || referenceNames.length > execution.reference.maxImages)
+    ) {
+      throw new WorkflowReferenceInputError("invalid_reference_image_count")
+    }
+    const resolved = resolveExecutionVariant(kind, params.workflowId, params.provider, referenceNames.length)
+    if (!resolved) throw new WorkflowReferenceInputError("invalid_reference_image_count")
+    variant = resolved.variant
+    templateVersion = resolved.execution.templateVersion
   }
-  // 欠槽的 API-node 输入是否 optional 尚未真机验证。v1 只接受导出图的完整槽位，避免向
-  // ComfyUI 提交靠猜测裁剪出的图；验证后可在 capability + 这里一起放宽。
-  if (
-    usesReference &&
-    execution.reference &&
-    (referenceNames.length < execution.reference.minImages || referenceNames.length > execution.reference.maxImages)
-  ) {
-    throw new WorkflowReferenceInputError("invalid_reference_image_count")
-  }
-  const resolved = resolveExecutionVariant(kind, params.workflowId, params.provider, referenceNames.length)
-  if (!resolved) throw new WorkflowReferenceInputError("invalid_reference_image_count")
-  const variant = resolved.variant
   const config = BRIDGE_WORKFLOW_BY_ID.get(variant)
   if (!config) throw new Error(`${kind} execution variant '${variant}' has no registered template`)
   const rendered = usesReference
@@ -178,7 +197,7 @@ function renderBridgeWorkflow(
   if (!isRecord(rendered)) throw new Error(`${kind} workflow '${config.id}' rendered to a non-object`)
   return {
     id: config.id,
-    templateVersion: execution.templateVersion,
+    templateVersion,
     workflow: rendered,
     needsGpu: config.needsGpu,
     gpuClass: config.gpuClass,

@@ -14,6 +14,7 @@ import { fetchJson } from "@/lib/aigc/http"
 import { storeImageBytesInR2 } from "@/lib/assets/r2-direct"
 import { submitOpenRouterImage } from "@/lib/engines/openrouter-image"
 import { ProviderInputError } from "@/lib/engines/provider-utils"
+import { createWorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 const fetchJsonMock = vi.mocked(fetchJson)
 const storeImageBytesInR2Mock = vi.mocked(storeImageBytesInR2)
@@ -49,7 +50,9 @@ describe("OpenRouter image workflow execution metadata", () => {
   })
 
   it("uses the catalog variant for model selection and persists its audit identity", async () => {
-    const result = await submitOpenRouterImage(request("detail"))
+    const result = await submitOpenRouterImage(request("detail"), createWorkflowJobSnapshot({
+      kind: "image", workflowId: "detail", provider: "openrouter-image",
+    }))
 
     const requestBody = JSON.parse(String(fetchJsonMock.mock.calls[0]?.[1]?.body))
     expect(requestBody.model).toBe("detail-model")
@@ -61,10 +64,26 @@ describe("OpenRouter image workflow execution metadata", () => {
     })
   })
 
+  it("uses the pinned variant instead of resolving the live catalog again", async () => {
+    const pinned = {
+      ...createWorkflowJobSnapshot({ kind: "image", workflowId: "standard", provider: "openrouter-image" }),
+      executionVariant: "openrouter-detail",
+      templateVersion: "legacy-7",
+    }
+    const result = await submitOpenRouterImage(request("standard"), pinned)
+    const requestBody = JSON.parse(String(fetchJsonMock.mock.calls[0]?.[1]?.body))
+    expect(requestBody.model).toBe("detail-model")
+    expect(result.response).toMatchObject({ execution_variant: "openrouter-detail", template_version: "legacy-7" })
+  })
+
   it("does not silently ignore reference images unsupported by the catalog", async () => {
     const withReference = request("standard")
     withReference.input.images = [{ name: "ref.png", image: "data:image/png;base64,AAAA" }]
-    await expect(submitOpenRouterImage(withReference)).rejects.toBeInstanceOf(ProviderInputError)
+    const snapshot = {
+      ...createWorkflowJobSnapshot({ kind: "image", workflowId: "standard", provider: "openrouter-image" }),
+      referenceCount: 1,
+    }
+    await expect(submitOpenRouterImage(withReference, snapshot)).rejects.toBeInstanceOf(ProviderInputError)
     expect(fetchJsonMock).not.toHaveBeenCalled()
   })
 })

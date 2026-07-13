@@ -3,7 +3,7 @@ import type { AigcJobRecord, ProviderStatusResult, ProviderSubmitResult, SubmitR
 import { fetchJson, firstString, isRecord, MissingProviderEnvError } from "@/lib/aigc/http"
 import { isSupportedImageContentType, MAX_INLINE_IMAGE_BYTES, storeImageBytesInR2 } from "@/lib/assets/r2-direct"
 import { ProviderConfigurationError, ProviderInputError, UnsupportedCancelError } from "@/lib/engines/provider-utils"
-import { resolveExecutionVariant } from "@/lib/workflows/definitions"
+import { executionFromWorkflowSnapshot, type WorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images"
 const OPENROUTER_IMAGE_TIMEOUT_MS = 240_000
@@ -36,16 +36,20 @@ export function ensureOpenRouterImageConfigured(): void {
   getConfig()
 }
 
-export async function submitOpenRouterImage(request: SubmitRequest): Promise<ProviderSubmitResult> {
+export async function submitOpenRouterImage(
+  request: SubmitRequest,
+  workflowSnapshot: WorkflowJobSnapshot,
+): Promise<ProviderSubmitResult> {
   const config = getConfig()
   const referenceCount = Array.isArray(request.input.images) ? request.input.images.length : 0
-  const resolved = resolveExecutionVariant("image", request.workflowId, OPENROUTER_IMAGE_PROVIDER, referenceCount)
-  if (!resolved) {
-    throw new ProviderInputError(
-      referenceCount > 0 ? "reference_images_not_supported" : `unsupported image workflow '${request.workflowId}'`,
-    )
-  }
-  const model = modelForVariant(config, resolved.variant)
+  const pinned = executionFromWorkflowSnapshot(workflowSnapshot, {
+    kind: "image",
+    workflowId: request.workflowId,
+    provider: OPENROUTER_IMAGE_PROVIDER,
+    referenceCount,
+  })
+  if (referenceCount > 0) throw new ProviderInputError("reference_images_not_supported")
+  const model = modelForVariant(config, pinned.variant)
   const response = await fetchJson(
     OPENROUTER_IMAGES_URL,
     {
@@ -73,8 +77,8 @@ export async function submitOpenRouterImage(request: SubmitRequest): Promise<Pro
       usage: stored.usage,
       completed_synchronously: true,
       catalog_workflow_id: request.workflowId,
-      execution_variant: resolved.variant,
-      template_version: resolved.execution.templateVersion,
+      execution_variant: pinned.variant,
+      template_version: pinned.templateVersion,
     },
   }
 }

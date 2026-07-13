@@ -3,7 +3,6 @@ import { getSession } from "@/lib/session"
 import { jsonError } from "@/lib/jobs/api"
 import { listUserLibrary } from "@/lib/jobs/store"
 import { serializeAsset, serializeGeneration } from "@/lib/generations/serialize"
-import { assetRuleForWorkflow } from "@/lib/workflows/definitions"
 import type { AigcKind } from "@/lib/aigc/types"
 
 export const runtime = "nodejs"
@@ -44,8 +43,8 @@ export function flattenLibraryItem(generation: Record<string, unknown>): Record<
     ? generation.assets.filter((asset): asset is Record<string, unknown> => typeof asset === "object" && asset !== null && !Array.isArray(asset))
     : []
   const kind = kindFrom(generation.kind)
-  const workflowId = stringFrom(generation.workflow_id) ?? "standard"
-  const primary = pickPrimaryAsset(assets, kind, workflowId)
+  const primaryTypes = stringArrayFrom(generation.primary_asset_types)
+  const primary = pickPrimaryAsset(assets, kind, primaryTypes)
   const thumbnail = assets.find((asset) => asset.asset_type === "preview")
     ?? assets.find((asset) => asset.asset_type === "image")
   const video = assets.find((asset) => asset.asset_type === "video")
@@ -69,12 +68,9 @@ export function flattenLibraryItem(generation: Record<string, unknown>): Record<
 function pickPrimaryAsset(
   assets: Record<string, unknown>[],
   kind: AigcKind,
-  workflowId: string,
+  primaryTypes: readonly string[],
 ): Record<string, unknown> | undefined {
-  const declared = assets.find((asset) => {
-    const assetType = stringFrom(asset.asset_type)
-    return assetType ? assetRuleForWorkflow(kind, workflowId, assetType)?.primary === true : false
-  })
+  const declared = assets.find((asset) => primaryTypes.includes(String(asset.asset_type)))
   if (declared) return declared
 
   // Legacy rows may predate the workflow output contract or use the old thumbnail name.
@@ -95,4 +91,10 @@ function titleFrom(generation: Record<string, unknown>): string {
 
 function stringFrom(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+function stringArrayFrom(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+    : []
 }

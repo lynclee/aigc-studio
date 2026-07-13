@@ -10,6 +10,7 @@ import { fetchJson } from "@/lib/aigc/http"
 import { ensureFalImageConfigured, submitFalImage } from "@/lib/engines/fal-image"
 import { ProviderInputError } from "@/lib/engines/provider-utils"
 import { MissingProviderEnvError } from "@/lib/aigc/http"
+import { createWorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 const fetchJsonMock = vi.mocked(fetchJson)
 
@@ -37,7 +38,9 @@ describe("Fal image workflow execution metadata", () => {
   })
 
   it("drives endpoint selection and audit identity from the catalog variant", async () => {
-    const result = await submitFalImage(request("detail"))
+    const result = await submitFalImage(request("detail"), createWorkflowJobSnapshot({
+      kind: "image", workflowId: "detail", provider: "fal-image",
+    }))
 
     expect(fetchJsonMock.mock.calls[0]?.[0]).toBe("https://queue.fal.run/example/detail")
     expect(result.response).toMatchObject({
@@ -47,10 +50,25 @@ describe("Fal image workflow execution metadata", () => {
     })
   })
 
+  it("uses the pinned variant even when it differs from the current public workflow mapping", async () => {
+    const pinned = {
+      ...createWorkflowJobSnapshot({ kind: "image", workflowId: "standard", provider: "fal-image" }),
+      executionVariant: "fal-image-detail",
+      templateVersion: "legacy-7",
+    }
+    const result = await submitFalImage(request("standard"), pinned)
+    expect(fetchJsonMock.mock.calls[0]?.[0]).toBe("https://queue.fal.run/example/detail")
+    expect(result.response).toMatchObject({ execution_variant: "fal-image-detail", template_version: "legacy-7" })
+  })
+
   it("does not silently ignore reference images unsupported by the catalog", async () => {
     const withReference = request("standard")
     withReference.input.images = [{ name: "ref.png", image: "data:image/png;base64,AAAA" }]
-    await expect(submitFalImage(withReference)).rejects.toBeInstanceOf(ProviderInputError)
+    const snapshot = {
+      ...createWorkflowJobSnapshot({ kind: "image", workflowId: "standard", provider: "fal-image" }),
+      referenceCount: 1,
+    }
+    await expect(submitFalImage(withReference, snapshot)).rejects.toBeInstanceOf(ProviderInputError)
     expect(fetchJsonMock).not.toHaveBeenCalled()
   })
 

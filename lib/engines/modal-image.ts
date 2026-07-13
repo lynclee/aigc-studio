@@ -7,6 +7,7 @@ import {
   providerStatusFrom,
 } from "@/lib/engines/provider-utils"
 import { renderImageWorkflow } from "@/lib/workflows/image-registry"
+import type { WorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 export const MODAL_IMAGE_PROVIDER = "modal-image"
 
@@ -41,13 +42,17 @@ export function ensureModalImageConfigured(): void {
   getConfig()
 }
 
-export async function submitModalImage(request: SubmitRequest): Promise<ProviderSubmitResult> {
+export async function submitModalImage(
+  request: SubmitRequest,
+  workflowSnapshot: WorkflowJobSnapshot,
+): Promise<ProviderSubmitResult> {
   const config = getConfig()
   const rendered = renderImageWorkflow({
     prompt: request.prompt,
     input: request.input,
     workflowId: request.workflowId,
     provider: MODAL_IMAGE_PROVIDER,
+    workflowSnapshot,
   })
   const response = await fetchJson(modalUrl(config, "run"), {
     method: "POST",

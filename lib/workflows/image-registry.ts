@@ -10,6 +10,7 @@ import {
   workflowExecutionFor,
   type WorkflowProvider,
 } from "@/lib/workflows/definitions"
+import type { WorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 export type ImageWorkflowId = "z_image_turbo" | "z_image_turbo_i2i" | "flux2_klein"
 
@@ -32,6 +33,7 @@ type RenderImageWorkflowParams = {
   input: Record<string, unknown>
   workflowId: string
   provider: WorkflowProvider
+  workflowSnapshot?: WorkflowJobSnapshot
 }
 
 export type RenderedImageWorkflow = {
@@ -109,31 +111,41 @@ for (const definition of listWorkflowDefinitions("image")) {
 }
 
 export function renderImageWorkflow(params: RenderImageWorkflowParams): RenderedImageWorkflow {
-  const execution = workflowExecutionFor("image", params.workflowId, params.provider)
-  if (!execution) {
-    throw new ImageWorkflowInputError(`image workflow '${params.workflowId}' is unavailable for '${params.provider}'`)
-  }
   const { width, height } = dimensionsFromInput(params.input)
   const seed = seedFromInput(params.input)
   const referenceNames = referenceNamesFrom(params.input)
   const usesReference = referenceNames.length > 0
-  if (usesReference) {
-    const capability = execution.reference
-    if (!capability?.enabled) {
-      throw new ImageWorkflowInputError("reference_images_not_supported")
+  let variant: string
+  let templateVersion: string
+  if (params.workflowSnapshot) {
+    const snapshot = params.workflowSnapshot
+    if (
+      snapshot.kind !== "image" ||
+      snapshot.workflowId !== params.workflowId ||
+      snapshot.provider !== params.provider ||
+      snapshot.referenceCount !== referenceNames.length
+    ) {
+      throw new ImageWorkflowInputError("invalid_workflow_snapshot")
     }
-    if (referenceNames.length < capability.minImages || referenceNames.length > capability.maxImages) {
-      throw new ImageWorkflowInputError("invalid_reference_image_count")
+    variant = snapshot.executionVariant
+    templateVersion = snapshot.templateVersion
+  } else {
+    const execution = workflowExecutionFor("image", params.workflowId, params.provider)
+    if (!execution) {
+      throw new ImageWorkflowInputError(`image workflow '${params.workflowId}' is unavailable for '${params.provider}'`)
     }
+    if (usesReference) {
+      const capability = execution.reference
+      if (!capability?.enabled) throw new ImageWorkflowInputError("reference_images_not_supported")
+      if (referenceNames.length < capability.minImages || referenceNames.length > capability.maxImages) {
+        throw new ImageWorkflowInputError("invalid_reference_image_count")
+      }
+    }
+    const resolved = resolveExecutionVariant("image", params.workflowId, params.provider, referenceNames.length)
+    if (!resolved) throw new ImageWorkflowInputError("invalid_reference_image_count")
+    variant = resolved.variant
+    templateVersion = resolved.execution.templateVersion
   }
-  const resolved = resolveExecutionVariant(
-    "image",
-    params.workflowId,
-    params.provider,
-    referenceNames.length,
-  )
-  if (!resolved) throw new ImageWorkflowInputError("invalid_reference_image_count")
-  const variant = resolved.variant
   const config = WORKFLOW_BY_ID.get(variant as ImageWorkflowId)
   if (!config) throw new Error(`image execution variant '${variant}' has no registered template`)
   const rendered = renderTemplate(config.template, {
@@ -150,7 +162,7 @@ export function renderImageWorkflow(params: RenderImageWorkflowParams): Rendered
   if (!workflow) throw new Error(`image workflow '${config.id}' template missing input.workflow after render`)
   return {
     id: config.id,
-    templateVersion: execution.templateVersion,
+    templateVersion,
     workflow,
     gpu: config.gpu,
     needsGpu: config.needsGpu,

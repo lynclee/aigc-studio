@@ -1,4 +1,9 @@
-import type { AigcAssetRecord, AigcGenerationRecord, AigcJobRecord, ProviderStatusResult } from "@/lib/aigc/types"
+import type {
+  AigcAssetRecord,
+  AigcGenerationWithWorkflowSnapshot,
+  AigcJobRecord,
+  ProviderStatusResult,
+} from "@/lib/aigc/types"
 import { FetchJsonTimeoutError, HttpJsonError } from "@/lib/aigc/http"
 import { deleteObject } from "@/lib/r2"
 import { stagingKeyForFinal } from "@/lib/delivery/asset-policy"
@@ -18,7 +23,7 @@ import {
 
 export type ReconcileResult = {
   job: AigcJobRecord
-  generation: AigcGenerationRecord | null
+  generation: AigcGenerationWithWorkflowSnapshot | null
   assets: AigcAssetRecord[]
   changed: boolean
 }

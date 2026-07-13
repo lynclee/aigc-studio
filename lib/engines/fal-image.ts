@@ -10,7 +10,7 @@ import {
   ProviderInputError,
   UnsupportedCancelError,
 } from "@/lib/engines/provider-utils"
-import { resolveExecutionVariant } from "@/lib/workflows/definitions"
+import { executionFromWorkflowSnapshot, type WorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 const FAL_QUEUE_BASE = "https://queue.fal.run"
 
@@ -38,16 +38,20 @@ export function ensureFalImageConfigured(): void {
   }
 }
 
-export async function submitFalImage(request: SubmitRequest): Promise<ProviderSubmitResult> {
+export async function submitFalImage(
+  request: SubmitRequest,
+  workflowSnapshot: WorkflowJobSnapshot,
+): Promise<ProviderSubmitResult> {
   const config = getConfig()
   const referenceCount = Array.isArray(request.input.images) ? request.input.images.length : 0
-  const resolved = resolveExecutionVariant("image", request.workflowId, FAL_IMAGE_PROVIDER, referenceCount)
-  if (!resolved) {
-    throw new ProviderInputError(
-      referenceCount > 0 ? "reference_images_not_supported" : `unsupported image workflow '${request.workflowId}'`,
-    )
-  }
-  const endpoint = endpointForVariant(resolved.variant)
+  const pinned = executionFromWorkflowSnapshot(workflowSnapshot, {
+    kind: "image",
+    workflowId: request.workflowId,
+    provider: FAL_IMAGE_PROVIDER,
+    referenceCount,
+  })
+  if (referenceCount > 0) throw new ProviderInputError("reference_images_not_supported")
+  const endpoint = endpointForVariant(pinned.variant)
   const response = await fetchJson(`${FAL_QUEUE_BASE}/${endpoint}`, {
     method: "POST",
     headers: falHeaders(config.apiKey),
@@ -70,8 +74,8 @@ export async function submitFalImage(request: SubmitRequest): Promise<ProviderSu
       endpoint,
       response_url: responseUrl,
       catalog_workflow_id: request.workflowId,
-      execution_variant: resolved.variant,
-      template_version: resolved.execution.templateVersion,
+      execution_variant: pinned.variant,
+      template_version: pinned.templateVersion,
     },
   }
 }

@@ -4,6 +4,7 @@ import { firstString, HttpJsonError, isRecord, MissingProviderEnvError, readJson
 import { isSupportedImageContentType, MAX_INLINE_IMAGE_BYTES, storeImageBytesInR2 } from "@/lib/assets/r2-direct"
 import { ProviderConfigurationError, ProviderContractError, UnsupportedCancelError } from "@/lib/engines/provider-utils"
 import { renderImageWorkflow } from "@/lib/workflows/image-registry"
+import type { WorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 const COMFYUI_REQUEST_TIMEOUT_MS = 60_000
 
@@ -25,13 +26,17 @@ export function ensureComfyUiImageConfigured(): void {
   getConfig()
 }
 
-export async function submitComfyUiImage(request: SubmitRequest): Promise<ProviderSubmitResult> {
+export async function submitComfyUiImage(
+  request: SubmitRequest,
+  workflowSnapshot: WorkflowJobSnapshot,
+): Promise<ProviderSubmitResult> {
   const config = getConfig()
   const rendered = renderImageWorkflow({
     prompt: request.prompt,
     input: request.input,
     workflowId: request.workflowId,
     provider: COMFYUI_IMAGE_PROVIDER,
+    workflowSnapshot,
   })
   const response = await fetchComfyJson(config, "prompt", {
     method: "POST",

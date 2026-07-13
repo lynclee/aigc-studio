@@ -8,6 +8,7 @@ vi.mock("@/lib/aigc/http", async (importOriginal) => {
 
 import { fetchJson } from "@/lib/aigc/http"
 import { getFalStyleStatus, ProviderInputError, submitFalStyle } from "@/lib/engines/fal-http"
+import { createWorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 const fetchJsonMock = vi.mocked(fetchJson)
 
@@ -21,6 +22,11 @@ function request(workflowId: string, images: string[] = []): SubmitRequest {
     },
     userId: "user-1",
   }
+}
+
+function snapshot(kind: "video" | "model3d", workflowId: string, referenceCount = 0) {
+  const provider = kind === "video" ? "fal-video" : "fal-model3d"
+  return createWorkflowJobSnapshot({ kind, workflowId, provider, referenceCount })
 }
 
 describe("fal reference-image contracts", () => {
@@ -39,12 +45,13 @@ describe("fal reference-image contracts", () => {
   })
 
   it("rejects reference images before calling the configured text-to-video endpoint", async () => {
-    await expect(submitFalStyle("video", request("standard", ["one"]))).rejects.toBeInstanceOf(ProviderInputError)
+    const invalid = { ...snapshot("video", "standard"), referenceCount: 1 }
+    await expect(submitFalStyle("video", request("standard", ["one"]), invalid)).rejects.toBeInstanceOf(ProviderInputError)
     expect(fetchJsonMock).not.toHaveBeenCalled()
   })
 
   it("preserves four ordered Hunyuan views", async () => {
-    const result = await submitFalStyle("model3d", request("standard", ["front", "back", "left", "right"]))
+    const result = await submitFalStyle("model3d", request("standard", ["front", "back", "left", "right"]), snapshot("model3d", "standard", 4))
 
     const [url, init] = fetchJsonMock.mock.calls[0]
     expect(url).toContain("hunyuan-3d")
@@ -62,7 +69,7 @@ describe("fal reference-image contracts", () => {
   })
 
   it("uses the Tripo multiview endpoint and its required view ordering", async () => {
-    const result = await submitFalStyle("model3d", request("game-asset", ["front", "back", "left", "right"]))
+    const result = await submitFalStyle("model3d", request("game-asset", ["front", "back", "left", "right"]), snapshot("model3d", "game-asset", 4))
 
     const [url, init] = fetchJsonMock.mock.calls[0]
     expect(url).toContain("multiview-to-3d")
@@ -71,7 +78,7 @@ describe("fal reference-image contracts", () => {
   })
 
   it("selects and records the single-image Tripo execution separately", async () => {
-    const result = await submitFalStyle("model3d", request("game-asset", ["front"]))
+    const result = await submitFalStyle("model3d", request("game-asset", ["front"]), snapshot("model3d", "game-asset", 1))
 
     const [url] = fetchJsonMock.mock.calls[0]
     expect(url).toContain("image-to-3d")
@@ -80,7 +87,7 @@ describe("fal reference-image contracts", () => {
   })
 
   it("records the catalog identity for Fal text-to-video", async () => {
-    const result = await submitFalStyle("video", request("standard"))
+    const result = await submitFalStyle("video", request("standard"), snapshot("video", "standard"))
     expect(result.response).toMatchObject({
       catalog_workflow_id: "standard",
       execution_variant: "fal-wan25-t2v",
@@ -88,9 +95,24 @@ describe("fal reference-image contracts", () => {
     })
   })
 
+  it("routes a text-to-3D submission by the pinned historical variant", async () => {
+    const pinned = {
+      ...snapshot("model3d", "game-asset"),
+      executionVariant: "hunyuan3d",
+      templateVersion: "legacy-7",
+    }
+    const result = await submitFalStyle("model3d", request("game-asset"), pinned)
+    expect(fetchJsonMock.mock.calls[0]?.[0]).toContain("hunyuan-3d")
+    expect(result.response).toMatchObject({ execution_variant: "hunyuan3d", template_version: "legacy-7" })
+  })
+
   it("rejects a fifth view rather than silently truncating it", async () => {
     await expect(
-      submitFalStyle("model3d", request("game-asset", ["one", "two", "three", "four", "five"])),
+      submitFalStyle(
+        "model3d",
+        request("game-asset", ["one", "two", "three", "four", "five"]),
+        { ...snapshot("model3d", "game-asset", 4), referenceCount: 5 },
+      ),
     ).rejects.toBeInstanceOf(ProviderInputError)
     expect(fetchJsonMock).not.toHaveBeenCalled()
   })
@@ -115,6 +137,8 @@ describe("fal reference-image contracts", () => {
       user_id: "user-1",
       kind,
       workflow_id: "standard",
+      workflow_revision: null,
+      workflow_snapshot: null,
       status: "running",
       provider: kind === "video" ? "fal-video" : "fal-model3d",
       provider_job_id: "request-1",
@@ -122,6 +146,8 @@ describe("fal reference-image contracts", () => {
       request: {},
       provider_response: { response_url: "https://queue.fal.run/result/1" },
       error: null,
+      reconcile_token: null,
+      reconcile_lease_until: null,
       created_at: "2026-01-01T00:00:00.000Z",
       updated_at: "2026-01-01T00:00:00.000Z",
       completed_at: null,

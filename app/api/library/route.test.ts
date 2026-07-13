@@ -13,6 +13,18 @@ function generation(kind: "image" | "video" | "model3d", assets: Record<string, 
 }
 
 describe("library item output selection", () => {
+  it("uses the pinned primary asset types for a retired workflow", () => {
+    const item = flattenLibraryItem({
+      ...generation("image", [
+        { asset_type: "preview", url: "https://cdn.example/preview.png" },
+        { asset_type: "legacy-render", url: "https://cdn.example/legacy.png" },
+      ]),
+      workflow_id: "retired-v1",
+      primary_asset_types: ["legacy-render"],
+    })
+    expect(item.downloadUrl).toBe("https://cdn.example/legacy.png")
+  })
+
   it("uses preview as a video thumbnail without falling back to the video URL", () => {
     const item = flattenLibraryItem(generation("video", [
       { asset_type: "video", url: "https://cdn.example/video.mp4" },

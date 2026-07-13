@@ -6,6 +6,7 @@ import { ensureProviderConfigured, providerNameForKind, submitProvider } from "@
 import { attachProviderSubmission, createQueuedJob, markJobFailed } from "@/lib/jobs/store"
 import { sanitizeSubmitRequest } from "@/lib/jobs/input"
 import { reconcileJob } from "@/lib/jobs/reconcile"
+import { createWorkflowJobSnapshot, referenceCountFromJobInput } from "@/lib/workflows/revision"
 
 export async function handleGeneratePost(req: Request, kind: AigcKind): Promise<NextResponse> {
   const session = await getSession()
@@ -16,17 +17,24 @@ export async function handleGeneratePost(req: Request, kind: AigcKind): Promise<
     ensureProviderConfigured(kind, provider)
     const body = await parseJsonObject(req)
     const request: SubmitRequest = sanitizeSubmitRequest(body, kind, session.userId, provider)
+    const workflowSnapshot = createWorkflowJobSnapshot({
+      kind,
+      workflowId: request.workflowId,
+      provider,
+      referenceCount: referenceCountFromJobInput(request.input),
+    })
     const job = await createQueuedJob({
       userId: session.userId,
       kind,
       provider,
       request,
+      workflowSnapshot,
     })
 
     let updatedJob: AigcJobRecord
     try {
-      const submission = await submitProvider(kind, request, { jobId: job.id }, provider)
-      updatedJob = await attachProviderSubmission(job.id, submission)
+      const submission = await submitProvider(kind, request, { jobId: job.id, workflowSnapshot }, provider)
+      updatedJob = await attachProviderSubmission(job, submission)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       await markJobFailed(job.id, message)

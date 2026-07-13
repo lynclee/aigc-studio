@@ -23,6 +23,7 @@ import { providerErrorFrom, providerJobIdFrom } from "@/lib/engines/provider-uti
 import { renderWorkflow } from "@/lib/workflows/registry"
 import { signDeliveryToken } from "@/lib/delivery/token"
 import { DeliveryVerifyError, verifyDeliveredAssets } from "@/lib/delivery/verify"
+import type { WorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 export const MODAL_BRIDGE_PROVIDER = "modal-bridge"
 
@@ -50,7 +51,7 @@ export function ensureModalBridgeConfigured(): void {
 export async function submitModalBridge(
   kind: AigcKind,
   request: SubmitRequest,
-  ctx: { jobId: string },
+  ctx: { jobId: string; workflowSnapshot: WorkflowJobSnapshot },
 ): Promise<ProviderSubmitResult> {
   const config = getConfig()
   const rendered = renderWorkflow(kind, {
@@ -58,6 +59,7 @@ export async function submitModalBridge(
     input: request.input,
     workflowId: request.workflowId,
     provider: MODAL_BRIDGE_PROVIDER,
+    workflowSnapshot: ctx.workflowSnapshot,
   })
   const token = signDeliveryToken({ jobId: ctx.jobId, userId: request.userId })
   const images = bridgeImagesFrom(request.input)

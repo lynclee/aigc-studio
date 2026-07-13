@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { renderWorkflow, WorkflowReferenceInputError } from "@/lib/workflows/registry"
 import type { AigcKind } from "@/lib/aigc/types"
+import type { WorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 function img(name: string) {
   return { name, image: `data:image/png;base64,${name}` }
@@ -19,6 +20,29 @@ function render(kind: AigcKind, params: { prompt: string; input: Record<string, 
 }
 
 describe("renderWorkflow — image", () => {
+  it("renders a retired image id from its pinned template identity", () => {
+    const workflowSnapshot: WorkflowJobSnapshot = {
+      schemaVersion: 1,
+      definitionRevision: "legacy-7",
+      kind: "image",
+      workflowId: "retired-image",
+      provider: "modal-bridge",
+      executionVariant: "z_image_turbo",
+      templateVersion: "legacy-7",
+      referenceCount: 0,
+      outputContract: [{ assetType: "image", category: "image", required: true, primary: true }],
+    }
+    const rendered = renderWorkflow("image", {
+      prompt: "legacy image",
+      input: { workflow: "retired-image", seed: 7 },
+      workflowId: "retired-image",
+      provider: "modal-bridge",
+      workflowSnapshot,
+    })
+    expect(rendered.id).toBe("z_image_turbo")
+    expect(rendered.templateVersion).toBe("legacy-7")
+  })
+
   it("records text and image variants separately", () => {
     expect(render("image", { prompt: "cat", input: { workflow: "standard", seed: 7 } }).id)
       .toBe("z_image_turbo")
@@ -28,6 +52,29 @@ describe("renderWorkflow — image", () => {
 })
 
 describe("renderWorkflow — video (seedance)", () => {
+  it("renders a retired public workflow id from its pinned execution artifact", () => {
+    const workflowSnapshot: WorkflowJobSnapshot = {
+      schemaVersion: 1,
+      definitionRevision: "legacy-7",
+      kind: "video",
+      workflowId: "retired-video",
+      provider: "modal-bridge",
+      executionVariant: "seedance2_t2v",
+      templateVersion: "legacy-7",
+      referenceCount: 0,
+      outputContract: [{ assetType: "video", category: "video", required: true, primary: true }],
+    }
+    const rendered = renderWorkflow("video", {
+      prompt: "legacy clip",
+      input: { workflow: "retired-video", seed: 7 },
+      workflowId: "retired-video",
+      provider: "modal-bridge",
+      workflowSnapshot,
+    })
+    expect(rendered.id).toBe("seedance2_t2v")
+    expect(rendered.templateVersion).toBe("legacy-7")
+  })
+
   it("无参考图时走文生视频模板(t2v)", () => {
     const rendered = render("video", { prompt: "a cat", input: { workflow: "standard", seed: 7 } })
     const { workflow } = rendered

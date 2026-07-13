@@ -10,10 +10,7 @@ import {
   ProviderInputError,
   UnsupportedCancelError,
 } from "@/lib/engines/provider-utils"
-import {
-  resolveExecutionVariant,
-  type ResolvedExecutionVariant,
-} from "@/lib/workflows/definitions"
+import { executionFromWorkflowSnapshot, type WorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 const FAL_QUEUE_BASE = "https://queue.fal.run"
 
@@ -56,9 +53,15 @@ export function ensureFalStyleConfigured(kind: FalKind): void {
   getConfig(kind)
 }
 
-export async function submitFalStyle(kind: FalKind, request: SubmitRequest): Promise<ProviderSubmitResult> {
+export async function submitFalStyle(
+  kind: FalKind,
+  request: SubmitRequest,
+  workflowSnapshot: WorkflowJobSnapshot,
+): Promise<ProviderSubmitResult> {
   const config = getConfig(kind)
-  const { endpoint, body, resolved } = kind === "model3d" ? buildModel3dSubmission(request) : buildVideoSubmission(request)
+  const { endpoint, body, execution } = kind === "model3d"
+    ? buildModel3dSubmission(request, workflowSnapshot)
+    : buildVideoSubmission(request, workflowSnapshot)
   const response = await fetchJson(`${FAL_QUEUE_BASE}/${endpoint}`, {
     method: "POST",
     headers: falHeaders(config.apiKey),
@@ -81,8 +84,8 @@ export async function submitFalStyle(kind: FalKind, request: SubmitRequest): Pro
       endpoint,
       response_url: responseUrl,
       catalog_workflow_id: request.workflowId,
-      execution_variant: resolved.variant,
-      template_version: resolved.execution.templateVersion,
+      execution_variant: execution.variant,
+      template_version: execution.templateVersion,
     },
   }
 }
@@ -132,23 +135,27 @@ export async function cancelFalStyle(_job: AigcJobRecord): Promise<Record<string
 type FalSubmission = {
   endpoint: string
   body: Record<string, unknown>
-  resolved: ResolvedExecutionVariant
+  execution: Readonly<{ variant: string; templateVersion: string }>
 }
 
-function buildVideoSubmission(request: SubmitRequest): FalSubmission {
+function buildVideoSubmission(request: SubmitRequest, workflowSnapshot: WorkflowJobSnapshot): FalSubmission {
   const referenceCount = inputImagesFrom(request.input).length
   if (referenceCount > 0) {
     throw new ProviderInputError("reference_images_not_supported")
   }
-  const resolved = resolveExecutionVariant("video", request.workflowId, "fal-video", referenceCount)
-  if (!resolved) throw new ProviderInputError(`unsupported video workflow '${request.workflowId}'`)
+  const execution = executionFromWorkflowSnapshot(workflowSnapshot, {
+    kind: "video",
+    workflowId: request.workflowId,
+    provider: "fal-video",
+    referenceCount,
+  })
   return {
-    endpoint: configuredVideoEndpoint(resolved.variant),
+    endpoint: configuredVideoEndpoint(execution.variant),
     body: {
       prompt: request.prompt,
       ...dropInternalKeys(request.input, ["mediaType", "workflow", "workflowId"]),
     },
-    resolved,
+    execution,
   }
 }
 
@@ -159,18 +166,22 @@ function configuredVideoEndpoint(variant: string): string {
   return configuredFalEndpoint("FAL_VIDEO_ENDPOINT", DEFAULT_VIDEO_ENDPOINT)
 }
 
-function buildModel3dSubmission(request: SubmitRequest): FalSubmission {
+function buildModel3dSubmission(request: SubmitRequest, workflowSnapshot: WorkflowJobSnapshot): FalSubmission {
   const images = inputImagesFrom(request.input)
   if (images.length > 4) throw new ProviderInputError("too_many_reference_images")
-  const resolved = resolveExecutionVariant("model3d", request.workflowId, "fal-model3d", images.length)
-  if (!resolved) throw new ProviderInputError(`unsupported model3d workflow or reference count '${request.workflowId}'`)
-  const endpoint = configuredModel3dEndpoint(resolved.variant)
+  const execution = executionFromWorkflowSnapshot(workflowSnapshot, {
+    kind: "model3d",
+    workflowId: request.workflowId,
+    provider: "fal-model3d",
+    referenceCount: images.length,
+  })
+  const endpoint = configuredModel3dEndpoint(execution.variant)
   return {
     endpoint,
     body: images.length === 0
       ? buildTextTo3dFalInput(endpoint, request)
       : buildModel3dFalInput(endpoint, images, request.input),
-    resolved,
+    execution,
   }
 }
 

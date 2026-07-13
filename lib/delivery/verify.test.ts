@@ -28,6 +28,35 @@ beforeEach(() => {
 })
 
 describe("verifyDeliveredAssets", () => {
+  it("verifies a retired workflow against its pinned output contract", async () => {
+    const retiredJob = {
+      ...job,
+      workflow_id: "retired-v1",
+      provider: "modal-bridge",
+      workflow_revision: "7",
+      workflow_snapshot: {
+        schemaVersion: 1,
+        definitionRevision: "7",
+        kind: "image",
+        workflowId: "retired-v1",
+        provider: "modal-bridge",
+        executionVariant: "retired-image-v7",
+        templateVersion: "7",
+        referenceCount: 0,
+        outputContract: [{ assetType: "legacy-render", category: "image", required: true, primary: true }],
+      },
+    } as AigcJobRecord
+    vi.mocked(getUpload).mockResolvedValue({
+      r2_key: "aigc/u1/job1/legacy-render-0.png", content_type: "image/png",
+    } as never)
+
+    const verified = await verifyDeliveredAssets(retiredJob, [asset({
+      asset_type: "legacy-render", r2_key: "aigc/u1/job1/legacy-render-0.png",
+    })])
+    expect(verified[0].output.assetType).toBe("legacy-render")
+    expect(copyObject).toHaveBeenCalledOnce()
+  })
+
   it("happy path: verifies then copies staging→final", async () => {
     const r = await verifyDeliveredAssets(job, [asset()])
     expect(r).toHaveLength(1)

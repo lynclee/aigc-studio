@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   validateWorkflowOutputs,
+  validateJobWorkflowOutputs,
   WorkflowOutputContractError,
 } from "@/lib/workflows/output-contract"
 
@@ -36,5 +37,28 @@ describe("workflow output completeness", () => {
       () => validateWorkflowOutputs("video", "standard", [{ assetType: "image" }]),
       "asset_type_not_allowed",
     )
+  })
+
+  it("validates retired Jobs against their pinned contract instead of the live catalog", () => {
+    const job = {
+      kind: "image" as const,
+      workflow_id: "retired-v1",
+      provider: "modal-bridge",
+      workflow_revision: "7",
+      workflow_snapshot: {
+        schemaVersion: 1,
+        definitionRevision: "7",
+        kind: "image",
+        workflowId: "retired-v1",
+        provider: "modal-bridge",
+        executionVariant: "retired-image-v7",
+        templateVersion: "7",
+        referenceCount: 0,
+        outputContract: [{ assetType: "legacy-render", category: "image", required: true, primary: true }],
+      },
+    }
+
+    expect(() => validateJobWorkflowOutputs(job, [{ assetType: "legacy-render" }])).not.toThrow()
+    expectCode(() => validateJobWorkflowOutputs(job, [{ assetType: "image" }]), "asset_type_not_allowed")
   })
 })

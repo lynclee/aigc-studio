@@ -117,6 +117,7 @@ describe("workflow definitions", () => {
     for (const kind of ["image", "video", "model3d"] as const) {
       for (const definition of listWorkflowDefinitions(kind)) {
         expect(definition.inputSchema.prompt.minLength).toBeGreaterThan(0)
+        expect(definition.revision).toMatch(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
         expect(definition.inputSchema.prompt.maxLength).toBeGreaterThanOrEqual(
           definition.inputSchema.prompt.minLength,
         )
@@ -165,6 +166,8 @@ describe("workflow definitions", () => {
       executions: { "fal-video": { baseVariant: "bad", templateVersion: "1" } },
     } satisfies WorkflowDefinition
     expect(() => validateWorkflowDefinitions([wrongProvider])).toThrow(/provider cannot execute this workflow kind/)
+
+    expect(() => validateWorkflowDefinitions([{ ...base, revision: "" }])).toThrow(/invalid workflow revision/)
   })
 })
 
@@ -182,6 +185,7 @@ function assertNoPrivateExecutionKeys(value: unknown): void {
       "referenceVariant",
       "referenceVariants",
       "templateVersion",
+      "revision",
     ]).not.toContain(key)
     if (typeof child === "string") {
       expect([

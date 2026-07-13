@@ -7,7 +7,7 @@ import type { IncomingMessage } from "node:http";
 import type { RequestOptions } from "node:https";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getR2Client } from "@/lib/r2";
-import type { AigcKind, ProviderOutputAsset } from "@/lib/aigc/types";
+import type { ProviderOutputAsset } from "@/lib/aigc/types";
 import {
   extForAsset,
   isAllowedContentType,
@@ -15,8 +15,8 @@ import {
   normalizeContentType,
   type AssetCategory,
 } from "@/lib/delivery/asset-policy";
-import { assetRuleForWorkflow } from "@/lib/workflows/definitions";
-import { validateWorkflowOutputs } from "@/lib/workflows/output-contract";
+import type { WorkflowAssetRule } from "@/lib/workflows/definitions";
+import { validateOutputContract } from "@/lib/workflows/output-contract";
 
 const TRUSTED_PROVIDER_HOST_SUFFIXES = [
   "fal.media",
@@ -42,12 +42,11 @@ export interface StoredAsset extends ProviderOutputAsset {
 export async function storeProviderAssetsInR2(params: {
   userId: string;
   jobId: string;
-  kind: AigcKind;
-  workflowId: string;
+  outputContract: readonly WorkflowAssetRule[];
   assets: ProviderOutputAsset[];
   keyVersion?: string;
 }): Promise<StoredAsset[]> {
-  validateWorkflowOutputs(params.kind, params.workflowId, params.assets);
+  validateOutputContract(params.outputContract, params.assets);
   const r2 = getR2Client();
   if (!r2) {
     throw new Error(
@@ -57,11 +56,7 @@ export async function storeProviderAssetsInR2(params: {
 
   const stored: StoredAsset[] = [];
   for (const asset of params.assets) {
-    const category = providerAssetCategoryForWorkflow(
-      params.kind,
-      params.workflowId,
-      asset.assetType,
-    );
+    const category = providerAssetCategoryForContract(params.outputContract, asset.assetType);
     if (!asset.url || asset.r2Key) {
       stored.push(asset);
       continue;
@@ -384,17 +379,12 @@ function parseContentLength(value: string | null, maxBytes: number): number {
   return contentLength;
 }
 
-export function providerAssetCategoryForWorkflow(
-  kind: AigcKind,
-  workflowId: string,
+export function providerAssetCategoryForContract(
+  outputContract: readonly WorkflowAssetRule[],
   assetType: string,
 ): AssetCategory {
-  const rule = assetRuleForWorkflow(kind, workflowId, assetType);
-  if (!rule) {
-    throw new Error(
-      `Provider asset type is not allowed for workflow ${kind}/${workflowId}: ${assetType}`,
-    );
-  }
+  const rule = outputContract.find((candidate) => candidate.assetType === assetType);
+  if (!rule) throw new Error(`Provider asset type is not allowed by the pinned workflow contract: ${assetType}`);
   return rule.category;
 }
 

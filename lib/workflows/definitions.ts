@@ -66,6 +66,8 @@ export type ResolvedExecutionVariant = Readonly<{
 
 export type WorkflowDefinition = Readonly<{
   id: string
+  /** Bump whenever the server-authoritative workflow contract changes. */
+  revision: string
   kind: AigcKind
   title: string
   hint: string
@@ -184,6 +186,7 @@ const PROVIDER_KINDS: Readonly<Record<WorkflowProvider, readonly AigcKind[]>> = 
 const DEFINITIONS: readonly WorkflowDefinition[] = Object.freeze([
   {
     id: "standard",
+    revision: "1",
     kind: "image",
     title: "标准出图",
     hint: "适合快速探索画面方向",
@@ -218,6 +221,7 @@ const DEFINITIONS: readonly WorkflowDefinition[] = Object.freeze([
   },
   {
     id: "detail",
+    revision: "1",
     kind: "image",
     title: "细节增强",
     hint: "适合更完整的美术描述",
@@ -242,6 +246,7 @@ const DEFINITIONS: readonly WorkflowDefinition[] = Object.freeze([
   },
   {
     id: "standard",
+    revision: "1",
     kind: "video",
     title: "标准视频",
     hint: "适合短镜头概念",
@@ -260,6 +265,7 @@ const DEFINITIONS: readonly WorkflowDefinition[] = Object.freeze([
   },
   {
     id: "standard",
+    revision: "1",
     kind: "model3d",
     title: "标准模型",
     hint: "只需填写提示词，适合常规 3D 资产",
@@ -284,6 +290,7 @@ const DEFINITIONS: readonly WorkflowDefinition[] = Object.freeze([
   },
   {
     id: "game-asset",
+    revision: "1",
     kind: "model3d",
     title: "游戏资产",
     hint: "只需填写提示词，更偏向可下载资产",
@@ -324,6 +331,9 @@ export function validateWorkflowDefinitions(definitions: readonly WorkflowDefini
     identities.add(identity)
     if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(definition.id)) {
       throw invalidDefinition(identity, "invalid public workflow id")
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(definition.revision)) {
+      throw invalidDefinition(identity, "invalid workflow revision")
     }
     validateInputSchema(identity, definition.inputSchema)
 

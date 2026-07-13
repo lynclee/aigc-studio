@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest"
 import {
-  providerAssetCategoryForWorkflow,
+  providerAssetCategoryForContract,
   providerAssetKey,
 } from "@/lib/assets/r2-store"
 import {
   isAllowedContentType,
   maxBytesForCategory,
 } from "@/lib/delivery/asset-policy"
+import { workflowDefinition } from "@/lib/workflows/definitions"
 
 describe("provider asset keys", () => {
   it("versions URL-provider objects by reconcile token", () => {
@@ -32,7 +33,10 @@ describe("provider asset workflow policy", () => {
     ["model3d", "standard"],
     ["model3d", "game-asset"],
   ] as const)("classifies %s/%s previews as images", (kind, workflowId) => {
-    const category = providerAssetCategoryForWorkflow(kind, workflowId, "preview")
+    const category = providerAssetCategoryForContract(
+      workflowDefinition(kind, workflowId)?.outputContract ?? [],
+      "preview",
+    )
 
     expect(category).toBe("image")
     expect(isAllowedContentType(category, "image/png")).toBe(true)
@@ -41,17 +45,23 @@ describe("provider asset workflow policy", () => {
   })
 
   it("keeps primary assets on their workflow-declared policies", () => {
-    expect(providerAssetCategoryForWorkflow("video", "standard", "video")).toBe("video")
-    expect(providerAssetCategoryForWorkflow("model3d", "standard", "model")).toBe("model")
-    expect(providerAssetCategoryForWorkflow("model3d", "standard", "model3d")).toBe("model")
+    const video = workflowDefinition("video", "standard")?.outputContract ?? []
+    const model = workflowDefinition("model3d", "standard")?.outputContract ?? []
+    expect(providerAssetCategoryForContract(video, "video")).toBe("video")
+    expect(providerAssetCategoryForContract(model, "model")).toBe("model")
+    expect(providerAssetCategoryForContract(model, "model3d")).toBe("model")
   })
 
   it("rejects provider asset types outside the workflow output contract", () => {
-    expect(() => providerAssetCategoryForWorkflow("video", "standard", "image")).toThrow(
-      "Provider asset type is not allowed for workflow video/standard: image",
-    )
-    expect(() => providerAssetCategoryForWorkflow("image", "missing", "image")).toThrow(
-      "Provider asset type is not allowed for workflow image/missing: image",
-    )
+    const video = workflowDefinition("video", "standard")?.outputContract ?? []
+    expect(() => providerAssetCategoryForContract(video, "image")).toThrow(/pinned workflow contract/)
+    expect(() => providerAssetCategoryForContract([], "image")).toThrow(/pinned workflow contract/)
+  })
+
+  it("classifies retired outputs from an explicit pinned contract", () => {
+    expect(providerAssetCategoryForContract([
+      { assetType: "legacy-render", category: "image", required: true, primary: true },
+    ], "legacy-render")).toBe("image")
+    expect(() => providerAssetCategoryForContract([], "legacy-render")).toThrow(/pinned workflow contract/)
   })
 })

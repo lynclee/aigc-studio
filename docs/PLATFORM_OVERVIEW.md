@@ -231,8 +231,8 @@ Generation(一次成功结果) → Asset(实际文件:R2 key / 类型 / 尺寸)
 
 | 层 | 状态 |
 |---|---|
-| 已实现 | 三入口工作台、任务生命周期(排队/生成/完成/取消,含并发保护)、四类图片引擎适配、R2 存储与安全校验、GitHub/Google 登录 |
-| 设计中(未落代码) | 工作流数据化 / 参数 Schema 平台化、自建 Modal ComfyUI 直传 R2、引擎按工作流分发 |
+| 已实现(待真机验证) | 三入口工作台、任务生命周期(排队/生成/完成/取消,含租约与 DB fence)、多引擎 adapter、GitHub/Google 登录、Modal Bridge `aigc-r2` 网站侧直传/核验/原子落库链路、Phase 1 代码内 Workflow Catalog(公共目录、provider-effective input schema、执行变体、模板版本、输出契约)、Job 级 immutable workflow revision/snapshot(固定 execution、模板版本身份与交付契约) |
+| 设计中 / 下一阶段 | 通用参数 `parameters[] + binding`、按 workflow 选择引擎、DB/UGC 工作流目录与运营能力 |
 | 待验证 | 尚未配置线上环境变量,**任一引擎的真实端到端生成还未跑通一次**;上线联调是紧接着的重点 |
 
 > 重要:当前"代码完成度"不等于"平台已上线"。下一步的核心是先把一条最短链路真正跑通。

@@ -64,9 +64,10 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 | `lib/workflows/registry.ts` | 按 kind 渲染工作流(image=image-registry;video/3D=Bridge API 模板) |
 | `lib/workflows/image-registry.ts` + `templates/*.json` | 图片工作流(含文生图 + 图生图 `z_image_turbo_i2i`);视频/3D 模板(seedance/tripo) |
 | `lib/workflows/definitions.ts` | Phase 1 代码内工作流目录：公共元数据、provider-effective input schema、执行变体、参考图能力、模板版本、输出契约 |
+| `lib/workflows/revision.ts` | Job 级不可变 workflow snapshot：固定 definition revision、provider execution、模板版本与输出契约；仅双空旧任务临时回退当前 Catalog |
 | `lib/workflows/validate-template.ts` / `output-contract.ts` | 启动期模板完整性校验 / 所有 provider 共用的产物集合完整性校验 |
 | `lib/assets/r2-store.ts` / `lib/r2.ts` | R2 落库(URL 下载 + 字节直存)/ 预签名 GET·PUT / HeadObject / delete |
-| `supabase/migrations/0001-0006` | 0002 主表;0004 上传台账;0005 原子落库 RPC;0006 租约 fencing + RPC 权限升级 |
+| `supabase/migrations/0001-0008` | 0002 主表;0004 上传台账;0005 原子落库 RPC;0006 租约 fencing + RPC 权限升级;0007 workflow revision/snapshot 一致性与冻结;0008 强制所有新 Job 携带 snapshot |
 
 ## 数据模型
 
@@ -76,7 +77,7 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 ## 部署同学必须完成
 
 1. Supabase → Authentication → Providers 启用 GitHub 与 Google,填 Client ID/Secret;两者回调都填 `https://<project-ref>.supabase.co/auth/v1/callback`;Site URL / Redirect URLs 含网站 `/api/auth/callback`(本地加 localhost)。
-2. SQL Editor 顺序执行 `0001`→`0006`;已有旧库先备份,只补执行未跑过的。即使已经执行过旧版 `0005`,也必须执行 `0006` 以应用租约 fencing 与 RPC 权限加固。
+2. 全新环境在 SQL Editor 顺序执行 `0001`→`0008`。已有旧库先备份；滚动升级顺序必须是：执行 `0007`(旧/新代码均可读写)→部署本版本(new-write snapshot)→执行 `0008`(拒绝后续双空 INSERT)。即使已经执行过旧版 `0005`，也必须执行 `0006` 以应用租约 fencing 与 RPC 权限加固。
 3. Vercel 环境变量(完整见 `.env.example`):
    - 基础:`NEXT_PUBLIC_SITE_URL`、两个 Supabase key、`SUPABASE_SERVICE_ROLE_KEY`、`CRON_SECRET`、`R2_*`、`FAL_KEY`。
    - 图片 provider 按选择:Modal Bridge 用 `MODAL_BRIDGE_*` + `BRIDGE_DELIVERY_TOKEN_SECRET`(+ 生产域名有 Deployment Protection 时 `VERCEL_AUTOMATION_BYPASS_SECRET`);其它见 `.env.example`。
@@ -86,14 +87,22 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 
 ## 当前状态(诚实)
 
-- **已完成 + 独立 review + test/typecheck/build 通过**:aigc-r2 全链路、input 参数透传、图生图、视频/3D 与多参考图工作流。Batch1 新增 PNG/JPEG/WebP/GIF signature/MIME 校验、两阶段大小预检、7 模板启动期完整性校验、模板变量非递归替换。Batch2 新增 Phase 1 `WorkflowDefinition` Catalog：Portal 工作流列表/现有参数控件、API allowlist/schema、provider execution/reference、template version、aigc-r2 与 URL/direct provider 输出核验共同消费同一目录；Fal/OpenRouter effective schema 不再展示/接受会被忽略的参数；所有 provider 都拒绝 preview-only 完成；浏览器 public catalog/API/generation 不暴露 provider/variant/env。
+- **已完成 + 独立 review + test/typecheck/build 通过**:aigc-r2 全链路、input 参数透传、图生图、视频/3D 与多参考图工作流。Batch1 新增 PNG/JPEG/WebP/GIF signature/MIME 校验、两阶段大小预检、7 模板启动期完整性校验、模板变量非递归替换。Batch2 新增 Phase 1 `WorkflowDefinition` Catalog：Portal 工作流列表/现有参数控件、API allowlist/schema、provider execution/reference、template version、aigc-r2 与 URL/direct provider 输出核验共同消费同一目录；Fal/OpenRouter effective schema 不再展示/接受会被忽略的参数；所有 provider 都拒绝 preview-only 完成；浏览器 public catalog/API/generation 不暴露 provider/variant/env。Batch3 已实现不可变 workflow revision/job snapshot：新任务在入库前由服务端固定 execution variant、template version、reference count 与 output contract；提交、回调 intake、核验/Copy、finalize 及作品库均读取冻结的 Job 快照，generation metadata 不复制第二份权威；非空损坏或身份不匹配一律 fail closed，`0008` 拒绝任何新的双空 Job。
 - **待部署同学真跑一次**:**任一引擎端到端从未真跑过**。需配好 env + R2 + Modal Secret,跑一次文生图/视频/3D E2E。工作流模板(`z_image_turbo_i2i`、seedance t2v/r2v、tripo t2model/i2model)也需在真 ComfyUI 各验证一次(此环境跑不了 ComfyUI/Modal)。当前明确拒绝 Seedance 1~3 张和 Tripo 1~2 张欠槽输入;逐数量真机验证后才能放宽能力矩阵。
-- **待做**:参考图先直传 job-scoped R2 staging(当前 inline data-uri 有 3MiB 合计保护)、OpenRouter Video adapter、视频/3D 的分辨率·时长·质量 UI 控件。Catalog 下一阶段优先补 immutable workflow revision/job snapshot，再做按 workflow 路由 provider 与通用 `parameters[] + binding`；当前仍是代码注册式 Phase 1，不应宣称已达到 DB/UGC 的“只加数据不发版”。
+- **待做**:参考图先直传 job-scoped R2 staging(当前 inline data-uri 有 3MiB 合计保护)、OpenRouter Video adapter、视频/3D 的分辨率·时长·质量 UI 控件。Catalog 下一阶段做按 workflow 路由 provider 与通用 `parameters[] + binding`；当前仍是代码注册式 Phase 1，不应宣称已达到 DB/UGC 的“只加数据不发版”。
+
+Workflow snapshot 只冻结在途任务的**执行身份与交付契约**；MIME、大小、鉴权、归属、租约等全局安全策略继续使用部署时最新规则。`workflow_revision` 与 `workflow_snapshot` 同时为空的迁移前旧任务会临时回退当前 Catalog；首次提升任一 definition revision 前，应先让这批 active legacy jobs 完成或终止，避免旧任务被新目录语义解释。
+
+首次 bump 前的发布门禁：`select count(*) from public.aigc_jobs where status in ('queued','running') and workflow_snapshot is null;` 必须返回 `0`。
+
+修改 provider execution mapping、execution variant、template version、参考图数量语义或 output contract 时，必须提升该 definition 的 `revision`；同一个 `(kind, workflow_id, revision)` 不得原地改变语义。旧 execution variant / 模板 artifact 至少保留到对应 active jobs 排空；标题、提示文案、样式等非执行变化无需 bump。
+
+未来增加 snapshot schema v2 时必须新增版本分派并继续保留 v1 parser；不得直接把 v1 常量改成 v2 后删除历史解析路径。
 
 ## 验证要求
 
 ```bash
-npm run typecheck && npm run build
+npm test && npm run typecheck && npm run build
 git diff --check
 ```
 UI 改动后在 1920×1080 与 1080×1920 各验证一次(需登录会话)。真实 E2E 需部署同学的 provider / Supabase / R2 配置。

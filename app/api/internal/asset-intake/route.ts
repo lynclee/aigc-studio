@@ -27,7 +27,7 @@ import {
   stagingKeyForFinal,
 } from "@/lib/delivery/asset-policy"
 import { getR2Env, signPutUrl } from "@/lib/r2"
-import { assetRuleForWorkflow } from "@/lib/workflows/definitions"
+import { workflowAssetRuleForJob } from "@/lib/workflows/revision"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -50,7 +50,7 @@ export async function POST(req: Request): Promise<NextResponse> {
       return deliveryError(400, "asset_type_not_allowed")
     }
     const assetType = body.asset_type
-    const assetRule = assetRuleForWorkflow(job.kind, job.workflow_id, assetType)
+    const assetRule = workflowAssetRuleForJob(job, assetType)
     if (!assetRule) return deliveryError(400, "asset_type_not_allowed")
     const position = parsePosition(body.position)
     if (position === null) return deliveryError(400, "invalid_position")

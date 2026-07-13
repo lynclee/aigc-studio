@@ -37,6 +37,8 @@ export interface AigcJobRecord {
   user_id: string
   kind: AigcKind
   workflow_id: string
+  workflow_revision: string | null
+  workflow_snapshot: unknown | null
   status: JobStatus
   provider: string
   provider_job_id: string | null
@@ -44,6 +46,8 @@ export interface AigcJobRecord {
   request: Record<string, unknown>
   provider_response: Record<string, unknown>
   error: string | null
+  reconcile_token: string | null
+  reconcile_lease_until: string | null
   created_at: string
   updated_at: string
   completed_at: string | null
@@ -60,6 +64,12 @@ export interface AigcGenerationRecord {
   provider_job_id: string | null
   metadata: Record<string, unknown>
   created_at: string
+}
+
+/** Generation row plus the immutable workflow authority joined from its Job. */
+export interface AigcGenerationWithWorkflowSnapshot extends AigcGenerationRecord {
+  workflow_revision: unknown
+  workflow_snapshot: unknown
 }
 
 export interface AigcAssetRecord {

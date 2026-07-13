@@ -17,6 +17,7 @@ import { signDeliveryToken } from "@/lib/delivery/token"
 import { verifyDeliveredAssets } from "@/lib/delivery/verify"
 import { getModalBridgeStatus, submitModalBridge } from "@/lib/engines/modal-bridge"
 import { renderWorkflow } from "@/lib/workflows/registry"
+import { createWorkflowJobSnapshot } from "@/lib/workflows/revision"
 
 const fetchJsonMock = vi.mocked(fetchJson)
 const renderWorkflowMock = vi.mocked(renderWorkflow)
@@ -33,11 +34,21 @@ const request: SubmitRequest = {
   userId: "user-1",
 }
 
+const workflowSnapshot = {
+  ...createWorkflowJobSnapshot({
+    kind: "image", workflowId: "standard", provider: "modal-bridge", referenceCount: 1,
+  }),
+  executionVariant: "workflow-v1",
+  templateVersion: "3",
+}
+
 const job: AigcJobRecord = {
   id: "job-1",
   user_id: "user-1",
   kind: "image",
   workflow_id: "standard",
+  workflow_revision: workflowSnapshot.definitionRevision,
+  workflow_snapshot: workflowSnapshot,
   status: "running",
   provider: "modal-bridge",
   provider_job_id: "bridge-job-1",
@@ -45,6 +56,8 @@ const job: AigcJobRecord = {
   request: {},
   provider_response: {},
   error: null,
+  reconcile_token: null,
+  reconcile_lease_until: null,
   created_at: "2026-07-12T00:00:00.000Z",
   updated_at: "2026-07-12T00:00:00.000Z",
   completed_at: null,
@@ -76,9 +89,10 @@ describe("Modal Bridge contract", () => {
   it("submits the versioned workflow with an aigc-r2 delivery grant without persisting secrets", async () => {
     fetchJsonMock.mockResolvedValue({ id: "bridge-job-1", status: "queued", gpu: "cpu" })
 
-    const result = await submitModalBridge("image", request, { jobId: "job-1" })
+    const result = await submitModalBridge("image", request, { jobId: "job-1", workflowSnapshot })
 
     expect(signDeliveryTokenMock).toHaveBeenCalledWith({ jobId: "job-1", userId: "user-1" })
+    expect(renderWorkflowMock).toHaveBeenCalledWith("image", expect.objectContaining({ workflowSnapshot }))
     expect(fetchJsonMock).toHaveBeenCalledOnce()
     const [url, init] = fetchJsonMock.mock.calls[0]
     expect(url).toBe("https://bridge.example/endpoint-run.modal.run")

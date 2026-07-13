@@ -1,5 +1,6 @@
 import { signGetUrl } from "@/lib/r2"
-import type { AigcAssetRecord, AigcGenerationRecord } from "@/lib/aigc/types"
+import type { AigcAssetRecord, AigcGenerationWithWorkflowSnapshot } from "@/lib/aigc/types"
+import { workflowOutputContractForGeneration } from "@/lib/workflows/revision"
 
 export async function serializeAsset(asset: AigcAssetRecord): Promise<Record<string, unknown>> {
   const signedUrl = asset.r2_key ? await signGetUrl(asset.r2_key).catch(() => null) : null
@@ -18,9 +19,12 @@ export async function serializeAsset(asset: AigcAssetRecord): Promise<Record<str
 }
 
 export async function serializeGeneration(
-  generation: AigcGenerationRecord,
+  generation: AigcGenerationWithWorkflowSnapshot,
   assets: AigcAssetRecord[],
 ): Promise<Record<string, unknown>> {
+  const primaryAssetTypes = workflowOutputContractForGeneration(generation)
+    .filter((rule) => rule.primary)
+    .map((rule) => rule.assetType)
   return {
     id: generation.id,
     job_id: generation.job_id,
@@ -28,6 +32,7 @@ export async function serializeGeneration(
     workflow_id: generation.workflow_id,
     prompt: generation.prompt,
     created_at: generation.created_at,
+    primary_asset_types: primaryAssetTypes,
     assets: await Promise.all(assets.map(serializeAsset)),
   }
 }

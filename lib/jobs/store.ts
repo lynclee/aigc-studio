@@ -4,6 +4,7 @@ import { getSupabaseAdmin } from "@/lib/supabase/admin"
 import type {
   AigcAssetRecord,
   AigcGenerationRecord,
+  AigcGenerationWithWorkflowSnapshot,
   AigcJobRecord,
   AigcKind,
   JobStatus,
@@ -15,7 +16,13 @@ import type {
 import { isRecord } from "@/lib/aigc/http"
 import { storeProviderAssetsInR2 } from "@/lib/assets/r2-store"
 import { deleteObject } from "@/lib/r2"
-import { validateWorkflowOutputs } from "@/lib/workflows/output-contract"
+import { validateJobWorkflowOutputs } from "@/lib/workflows/output-contract"
+import type { WorkflowProvider } from "@/lib/workflows/definitions"
+import {
+  assertSubmissionMatchesWorkflowSnapshot,
+  workflowOutputContractForJob,
+  type WorkflowJobSnapshot,
+} from "@/lib/workflows/revision"
 
 export class BackendStoreError extends Error {
   constructor(message: string, public readonly status = 500) {
@@ -42,8 +49,9 @@ export function requireAigcAdmin(): SupabaseClient {
 export async function createQueuedJob(params: {
   userId: string
   kind: AigcKind
-  provider: string
+  provider: WorkflowProvider
   request: SubmitRequest
+  workflowSnapshot: WorkflowJobSnapshot
 }): Promise<AigcJobRecord> {
   const admin = requireAigcAdmin()
   await assertOwnerCanCreateJob(params.userId)
@@ -53,6 +61,8 @@ export async function createQueuedJob(params: {
       user_id: params.userId,
       kind: params.kind,
       workflow_id: params.request.workflowId,
+      workflow_revision: params.workflowSnapshot.definitionRevision,
+      workflow_snapshot: params.workflowSnapshot,
       status: "queued",
       provider: params.provider,
       request: params.request,
@@ -88,9 +98,10 @@ export async function assertOwnerCanCreateJob(userId: string): Promise<void> {
 }
 
 export async function attachProviderSubmission(
-  jobId: string,
+  job: AigcJobRecord,
   submission: ProviderSubmitResult,
 ): Promise<AigcJobRecord> {
+  assertSubmissionMatchesWorkflowSnapshot(job, submission)
   const admin = requireAigcAdmin()
   const now = new Date().toISOString()
   const terminal = terminalStatus(submission.status) && submission.status !== "succeeded"
@@ -105,7 +116,7 @@ export async function attachProviderSubmission(
       updated_at: now,
       completed_at: terminal ? now : null,
     })
-    .eq("id", jobId)
+    .eq("id", job.id)
     .select("*")
     .single()
   if (error) throw new BackendStoreError(`update provider job failed: ${error.message}`)
@@ -370,14 +381,14 @@ export async function listActiveJobs(limit = 50): Promise<AigcJobRecord[]> {
 export async function finalizeJobWithAssets(
   job: ClaimedAigcJobRecord,
   assets: ProviderOutputAsset[],
-): Promise<{ generation: AigcGenerationRecord; assets: AigcAssetRecord[] } | null> {
-  validateWorkflowOutputs(job.kind, job.workflow_id, assets)
+): Promise<{ generation: AigcGenerationWithWorkflowSnapshot; assets: AigcAssetRecord[] } | null> {
+  validateJobWorkflowOutputs(job, assets)
+  const outputContract = workflowOutputContractForJob(job)
   const admin = requireAigcAdmin()
   const storedAssets = await storeProviderAssetsInR2({
     userId: job.user_id,
     jobId: job.id,
-    kind: job.kind,
-    workflowId: job.workflow_id,
+    outputContract,
     assets,
     keyVersion: job.reconcile_token,
   })
@@ -409,6 +420,8 @@ export async function finalizeJobWithAssets(
     p_prompt: prompt,
     p_provider: job.provider,
     p_provider_job_id: job.provider_job_id,
+    // Workflow authority is never duplicated into caller-authored generation
+    // metadata. Reads join the immutable aigc_jobs snapshot instead.
     p_generation_metadata: { provider_response: job.provider_response },
     p_assets: assetsPayload,
   })
@@ -430,38 +443,39 @@ export async function finalizeJobWithAssets(
 }
 
 export async function getGenerationForJob(jobId: string, userId: string): Promise<{
-  generation: AigcGenerationRecord | null
+  generation: AigcGenerationWithWorkflowSnapshot | null
   assets: AigcAssetRecord[]
 }> {
   const admin = requireAigcAdmin()
   const { data: generation, error } = await admin
     .from("aigc_generations")
-    .select("*")
+    .select("*, aigc_jobs!inner(workflow_revision, workflow_snapshot)")
     .eq("job_id", jobId)
     .eq("user_id", userId)
     .maybeSingle()
   if (error) throw new BackendStoreError(`load generation failed: ${error.message}`)
   if (!generation) return { generation: null, assets: [] }
+  const generationWithWorkflow = generationWithWorkflowAuthority(generation)
 
   const { data: assets, error: assetError } = await admin
     .from("aigc_assets")
     .select("*")
-    .eq("generation_id", (generation as AigcGenerationRecord).id)
+    .eq("generation_id", generationWithWorkflow.id)
     .eq("user_id", userId)
     .not("r2_key", "is", null)
     .order("position", { ascending: true })
   if (assetError) throw new BackendStoreError(`load assets failed: ${assetError.message}`)
-  return { generation: generation as AigcGenerationRecord, assets: (assets ?? []) as AigcAssetRecord[] }
+  return { generation: generationWithWorkflow, assets: (assets ?? []) as AigcAssetRecord[] }
 }
 
 export async function listUserLibrary(userId: string): Promise<{
-  generations: AigcGenerationRecord[]
+  generations: AigcGenerationWithWorkflowSnapshot[]
   assets: AigcAssetRecord[]
 }> {
   const admin = requireAigcAdmin()
   const { data: generations, error } = await admin
     .from("aigc_generations")
-    .select("*, aigc_jobs!inner(status)")
+    .select("*, aigc_jobs!inner(status, workflow_revision, workflow_snapshot)")
     .eq("user_id", userId)
     .eq("aigc_jobs.status", "succeeded")
     .order("created_at", { ascending: false })
@@ -486,11 +500,29 @@ export async function listUserLibrary(userId: string): Promise<{
   const generationIdsWithAssets = new Set(assetRows.map((asset) => asset.generation_id))
   const generationRows = rawGenerationRows
     .filter((row) => generationIdsWithAssets.has(row.id))
-    .map(({ aigc_jobs: _aigcJobs, ...generation }) => generation as AigcGenerationRecord)
+    .map(generationWithWorkflowAuthority)
   const visibleGenerationIds = new Set(generationRows.map((row) => row.id))
   return {
     generations: generationRows,
     assets: assetRows.filter((asset) => visibleGenerationIds.has(asset.generation_id)),
+  }
+}
+
+function generationWithWorkflowAuthority(raw: unknown): AigcGenerationWithWorkflowSnapshot {
+  if (!isRecord(raw)) throw new BackendStoreError("generation row is malformed")
+  const joined = Array.isArray(raw.aigc_jobs) ? raw.aigc_jobs[0] : raw.aigc_jobs
+  if (
+    !isRecord(joined)
+    || !Object.prototype.hasOwnProperty.call(joined, "workflow_revision")
+    || !Object.prototype.hasOwnProperty.call(joined, "workflow_snapshot")
+  ) {
+    throw new BackendStoreError("generation workflow authority is missing")
+  }
+  const { aigc_jobs: _joinedJob, ...generation } = raw
+  return {
+    ...(generation as unknown as AigcGenerationRecord),
+    workflow_revision: joined.workflow_revision,
+    workflow_snapshot: joined.workflow_snapshot,
   }
 }
 

@@ -24,7 +24,7 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 - 输出完整性统一覆盖 aigc-r2 与 URL/direct provider；video/model preview 按 image 类别核验，作品库按 output contract 选择主资产与预览。
 - 浏览器只接收 public catalog；generation/API 错误不再暴露 provider/variant/env 名。
 
-当前定位是**高质量的 Phase 1 代码内 Catalog**，不是最终平台级“加一条数据即可上线”。仍未落地：input R2 staging、不可变 workflow revision、按 workflow 路由引擎、通用 parameters/bindings、DB/UGC 工作流目录。
+当前定位是**带不可变 Job snapshot 的高质量 Phase 1 代码内 Catalog**，不是最终平台级“加一条数据即可上线”。仍未落地：input R2 staging、按 workflow 路由引擎、通用 parameters/bindings、DB/UGC 工作流目录。
 
 ## 0. 架构定位差异
 
@@ -33,7 +33,7 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 | 产物交付 | **aigc-r2 直传**(Bridge 直传 R2 + push 回调,主线) | provider 返回 URL -> Vercel 下载 -> 存 R2(旧模式) |
 | 状态机 | application 层(claimJobForReconcile + finalize_job_assets RPC fence + lease_until) | **CAS + DB trigger**(`transitionJob` with `fromStatuses` + `enforce_job_state_transition`) |
 | 资产生命周期 | 只有孤儿清理(cleanup),**无用户删除** | **tombstone + pending_delete 队列 + 异步重试** |
-| 工作流抽象 | **Phase 1 代码内 WorkflowDefinition Catalog**；通用参数 binding / revision / DB 化待做 | **workflow-contract 契约层**(capability 声明 + validate) |
+| 工作流抽象 | **Phase 1 代码内 WorkflowDefinition Catalog + immutable Job snapshot**；通用参数 binding / DB 化待做 | **workflow-contract 契约层**(capability 声明 + validate) |
 | Engine 抽象 | providers.ts switch 分发,5 adapter 无统一 interface | **EngineClient interface**(submit/status/cancel/health) |
 | 历史/UI | listUserLibrary(API 每次),无前端缓存 | **3 层历史**(L1 localStorage + L2 Supabase + L3 签名缓存) |
 | 积分 | 无(设计师免费) | credit_events 账本(begin_job_submission/refund + business_key 幂等) |
@@ -56,7 +56,7 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 - `app/api/assets/cleanup/route.ts`:独立清理 route(vs aigc-studio 内联在 reconcile)
 
 **移植建议**:
-- 加 migration:`aigc_assets` 加 `state`(active/pending_delete/deleted/error)+ `delete_requested_at` + `delete_attempts` + `delete_error` + `deleted_at` 字段;`aigc_generations` 加 tombstone 语义(status 已有,可复用或加 deleted)
+- 加 migration:`aigc_assets` 加 `state`(active/pending_delete/deleted/error)+ `delete_requested_at` + `delete_attempts` + `delete_error` + `deleted_at` 字段;`aigc_generations` 加 `deleted_at` tombstone(当前无 generation status 字段)
 - 加 `lib/assets/delete.ts`:`tombstoneGenerationAndQueueAssets` + `processPendingAssetDeletes`(改用 aigc-studio 的 `deleteObject`)
 - 加 `app/api/library/[id]/route.ts` DELETE:用户删除作品(软删 + 入队)
 - reconcile cron 扩展:扫 `pending_delete` 批量删 R2(复用现有 cron)
@@ -108,7 +108,8 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 **已完成 / 后续演进**:
 - ✅ 已扩为 `WorkflowDefinition{inputSchema,outputContract,executions}` 代码内唯一目录。
 - ✅ UI 工作流列表/现有参数控件、API 校验、provider 变体和输出核验共同消费定义。
-- 下一步补不可变 definition revision；再演进为通用 `parameters[] + binding`，最后抽到 DB(PLATFORM_OVERVIEW Phase 2)。
+- ✅ 已补不可变 definition revision / Job snapshot；新任务固定 provider execution、模板、参考图形状与 output contract，旧定义退役后在途任务仍按原契约完成。
+- 下一步演进为通用 `parameters[] + binding`，最后抽到 DB(PLATFORM_OVERVIEW Phase 2)。
 - **不要照搬 cost/credit**(aigc-studio 无积分)
 
 **成本**:高(重构 workflows/ + 参数 Schema)。**价值**:对齐核心愿景,为"上百工作流"铺路。可渐进。
@@ -196,21 +197,22 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 
 | 顺序 | 批次 | 进入条件 / 目标 |
 |---|---|---|
-| 1 | Stage 0 真实 E2E + magic-byte + 模板完整性检查 | 先证明图片→视频→3D 的真实垂直切片 |
-| 2 | 参考图 R2 input staging | inline 链路跑通后解除请求体/DB 大对象边界 |
-| 3 | 资产删除 + DB 状态不变量 | 形成完整资产生命周期与数据库最后防线 |
-| 4 | 直连下载 + 批量签名 + 作品库缓存/分页 | 真实作品库有数据后优化 UX/成本 |
-| 5 | ✅ Phase 1 Workflow Execution Catalog | 已由现有图片/视频/3D 工作流落地；revision/通用 binding/DB 化后续继续 |
-| 6 | EngineClient 收敛 | Catalog/引擎边界稳定后渐进重构 adapter |
-| 7 | 视频/3D 专业 UI 与 mesh 优化 | 真实视频/GLB 主链稳定后再引入重依赖 |
+| 1 | Stage 0 最短真实 E2E | 先证明一个 Modal Bridge 文生图任务可完成登录→生成→R2→DB→作品库；magic-byte 与模板静态检查已完成，不能替代真机 |
+| 2 | ✅ Immutable Workflow revision / Job snapshot | 已固定在途 Job 的 execution、template version identity 与 output contract；仅双空迁移前旧任务临时回退当前 Catalog |
+| 3 | 参考图 R2 input staging | inline 链路跑通后解除请求体/DB 大对象边界 |
+| 4 | DB 状态不变量 + 资产删除 | 基于真实状态轨迹补 trigger，再形成 tombstone + pending_delete 生命周期 |
+| 5 | 直连下载 + 批量签名 + 作品库缓存/分页 | 真实作品库有数据后优化 UX/成本 |
+| 6 | ✅ Phase 1 Workflow Execution Catalog | 已由现有图片/视频/3D 工作流落地；通用 binding/DB 化后续继续 |
+| 7 | EngineClient 收敛 | Catalog/引擎边界稳定后渐进重构 adapter |
+| 8 | 视频/3D 专业 UI 与 mesh 优化 | 真实视频/GLB 主链稳定后再引入重依赖 |
 
 ## 6. 关键迁移文件(playground 参考)
 
 | playground 文件 | 用途 | 移植目标 |
 |---|---|---|
 | `lib/assets/repository.ts` | tombstone + pending_delete + upsert_owned_asset | `lib/assets/delete.ts` + `app/api/library/[id]/route.ts` |
-| `supabase/migrations/20260610180000_atomic_asset_ownership_rpc.sql` | upsert_owned_asset 原子 RPC | aigc-studio `0007` migration |
-| `supabase/migrations/20260608182124_establish_jobs_authority.sql` | enforce_job_state_transition trigger | aigc-studio `0008` migration |
+| `supabase/migrations/20260610180000_atomic_asset_ownership_rpc.sql` | upsert_owned_asset 原子 RPC | aigc-studio 后续 `0009` migration(拟) |
+| `supabase/migrations/20260608182124_establish_jobs_authority.sql` | enforce_job_state_transition trigger | aigc-studio 后续 `0010` migration(拟) |
 | `lib/generation-kernel/workflow-contract.ts` | workflow 契约 + capability | ✅ `lib/workflows/definitions.ts` + `output-contract.ts` |
 | `lib/image-engine/engine-client.ts` + `types.ts` | EngineClient interface + NormalizedStatus | `lib/engines/engine-client.ts`(新建) |
 | `components/image-combiner/hooks/use-persistent-history.tsx` | 3 层历史 | `components/library/use-persistent-library.tsx`(新建) |
@@ -218,4 +220,4 @@ Playground 是实现参考库,**不是 aigc-studio 的产品路线图**。执行
 
 ## 7. 一句话总结
 
-aigc-studio 的 aigc-r2 直传链路领先 playground；本轮已吸收**输入真实性校验、模板完整性检查与 Phase 1 workflow-contract/catalog**，且未替换现有强交付语义。下一优先级仍是用户集中跑真实 Stage 0 E2E；之后再做 input R2 staging、revision、资产删除/DB 状态约束等闭环。
+aigc-studio 的 aigc-r2 直传链路领先 playground；本轮已吸收**输入真实性校验、模板完整性检查、Phase 1 workflow-contract/catalog 与 immutable workflow revision/Job snapshot**，且未替换现有强交付语义。下一优先级仍是真实 Stage 0 E2E；随后做 input R2 staging、DB 状态约束与资产删除闭环。
