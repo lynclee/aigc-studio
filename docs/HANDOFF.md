@@ -1,7 +1,7 @@
 # HANDOFF — AIGC Studio
 
 给后续 Claude Code / Codex 会话的交接说明。开始前先看 `git status`,不要回退其他工作者的改动。
-顶层愿景见 `docs/PLATFORM_OVERVIEW.md`;Modal Bridge 契约见 `docs/PLUGIN_MODAL_BRIDGE_CHANGE_PLAN.md`。
+顶层愿景见 `docs/PLATFORM_OVERVIEW.md`;Modal Bridge 契约见 `docs/PLUGIN_MODAL_BRIDGE_CHANGE_PLAN.md`;从账号、Token、权限到首轮 E2E 的部署步骤见 `docs/CODEX_DEPLOYMENT_RUNBOOK.md`(详版)与 `docs/CLAUDE_DEPLOYMENT_RUNBOOK.md`(简明版,术语带注释)。
 
 ## 产品与主流程
 
@@ -93,7 +93,7 @@ Vercel job-complete → 领 reconcile 租约 → HeadObject 核验(size/ETag)+ C
 2. **首次提升 workflow revision 前排空 legacy active Job。** 运行 `select count(*) from public.aigc_jobs where status in ('queued','running') and workflow_snapshot is null;`，结果必须为 `0`；否则先 reconcile/终止，不让旧任务被新 Catalog 语义解释。
 3. **审生产 R2 key 权威格式。** 发布删除 worker 前按下方查询分类，`unknown` 必须为 `0`；同时确认旧 OpenRouter Generation 的 `provider_job_id` 不缺失。无法归类的历史资产先迁移/豁免评审，不能靠放宽删除前缀解决。
 4. **评估 `0009/0010` 锁窗口。** 先看 `aigc_assets` / `aigc_generations` 估算行数和总大小；小表直接维护窗口执行。主要风险在 `0009`：它会新增多列、校验 4 个未使用 `NOT VALID` 的 CHECK，并创建 3 个非 `CONCURRENTLY` 索引；约束变更会持有强锁，普通建索引也会扫描全表并阻塞写入。`0010` 的 version CHECK 已使用 `NOT VALID → VALIDATE`，但 error partial index 仍会扫描现有表。大表需另做经 review 的分阶段迁移（例如 `NOT VALID`、`CREATE INDEX CONCURRENTLY`、再 `VALIDATE`），不能临时改已发布 migration 或在业务高峰硬跑。
-5. **确认 Cron 配额和鉴权。** `vercel.json` 当前恰好两条每日 Cron（03:30 reconcile、04:00 cleanup）；部署前确认套餐仍允许，勿直接增加第三条。缺失/错误 `CRON_SECRET` 必须 401 且 cleanup/backlog 零调用，正确鉴权响应只能含聚合计数。
+5. **确认 Cron 配额和鉴权。** `vercel.json` 当前两条每日 Cron（03:30 reconcile、04:00 cleanup）。按 Vercel 官方限制（2026-06 文档），Hobby 每项目最多 100 条 Cron，但每条最低每日一次且触发精度 ±59 分钟——约束在频率而非条数。缺失/错误 `CRON_SECRET` 必须 401 且 cleanup/backlog 零调用，正确鉴权响应只能含聚合计数。
 
 R2 key 分类审计（只输出类别与数量，不导出 key）：
 

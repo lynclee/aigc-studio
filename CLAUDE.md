@@ -106,7 +106,7 @@ Supabase 后台必须配置 GitHub 和 Google provider：两个第三方 OAuth �
 
 ## 工作流程
 
-- 文档改动同步 README、`docs/HANDOFF.md`（现状入口）、`docs/PLUGIN_MODAL_BRIDGE_CHANGE_PLAN.md`（插件契约）和用户指定的在线部署手册。docs/ 精简为三份:HANDOFF、PLATFORM_OVERVIEW、PLUGIN_MODAL_BRIDGE_CHANGE_PLAN。
+- 文档改动同步 README、`docs/HANDOFF.md`（现状入口）、`docs/PLUGIN_MODAL_BRIDGE_CHANGE_PLAN.md`（插件契约）和用户指定的在线部署手册。docs/ 核心文档:HANDOFF、PLATFORM_OVERVIEW、PLUGIN_MODAL_BRIDGE_CHANGE_PLAN,部署手册为 CODEX_DEPLOYMENT_RUNBOOK（详版）与 CLAUDE_DEPLOYMENT_RUNBOOK（简明版,术语带注释）。
 - 截图、验收图片统一在 `/workspace/documents/screenshot`。
 - 代码改动至少跑 `npm run typecheck`；重要改动跑 `npm run build`。
 - UI 改动后在 1920×1080 与 1080×1920 各验证一次。
