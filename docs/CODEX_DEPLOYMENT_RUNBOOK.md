@@ -339,12 +339,12 @@ Settings → CORS Policy
 node scripts/setup-r2-cors.mjs https://你的生产域名
 ```
 
-但编辑 Bucket CORS 需要 `Admin Read & Write`。若运行时 Object Token 被拒：
+但编辑 Bucket CORS 需要 `Admin Read & Write`。若运行时 Object Token 被拒（`AccessDenied`）：
 
 1. 临时创建 scoped Admin Token。
-2. 只用它执行一次 CORS 配置。
-3. 配置完成后立即撤销。
-4. Vercel 中继续使用原 Object Read & Write Token。
+2. 脚本没有单独的 admin 变量，只读 `.env.local` 的 `R2_*`：把 `.env.local` 里的 `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` 暂时换成 Admin Token 的值，再跑一次脚本。
+3. 跑完把 `.env.local` 换回原 Object Token 值，并在 Cloudflare 撤销该 Admin Token。
+4. Vercel 中自始至终只保存原 Object Read & Write Token。
 
 参考：
 
@@ -570,6 +570,8 @@ AIGC_ASSET_HOST_ALLOWLIST
 ```
 
 `AIGC_VIDEO_PROVIDER` 和 `AIGC_MODEL3D_PROVIDER` 可以暂时保持默认，但不要在缺少 `FAL_KEY` 时提交视频/3D。
+
+注意区分两个仅一词之差的变量：`COMFY_ORG_API_KEY` 是 Vercel env，只在 `AIGC_IMAGE_PROVIDER=comfyui`（自建 ComfyUI）时使用；`COMFY_API_KEY_COMFY_ORG` 是 Modal Secret 键名（见 8.7/12.2）。两者不要互相填串。
 
 ### 9.3 不要使用旧交互脚本选择 provider
 

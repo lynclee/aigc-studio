@@ -120,7 +120,7 @@ async function main() {
     AllowedOrigins: [normalizedOrigin],
     AllowedMethods: ["GET", "HEAD"],
     AllowedHeaders: ["*"],
-    ExposeHeaders: ["content-length"],
+    ExposeHeaders: ["content-length", "ETag"],
     MaxAgeSeconds: 3600,
   }
 
